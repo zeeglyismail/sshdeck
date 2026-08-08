@@ -4,6 +4,8 @@
 
 > Built for homelab / internal-network use. It stores credentials to your fleet — run it behind a VPN, never on the public internet.
 
+![SSHDeck — terminal with live monitoring bar](docs/screenshot-terminal.png)
+
 ## Features
 
 **Terminal**
