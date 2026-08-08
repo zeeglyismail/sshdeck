@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSHDeck</title>
+<link rel="stylesheet" href="/static/vendor/xterm.css">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- top bar -->
+  <header id="topbar">
+    <div class="brand">SSH<span>Deck</span></div>
+    <nav id="mainnav">
+      <button data-view="terms" class="nav-btn active">Terminals</button>
+      <button data-view="files" class="nav-btn">Files</button>
+      <button data-view="keys" class="nav-btn">Keys</button>
+      <button data-view="settings" class="nav-btn">Settings</button>
+    </nav>
+    <div class="top-right">
+      <span id="whoami"></span>
+      <button id="logout" class="btn-ghost">Sign out</button>
+    </div>
+  </header>
+
+  <div id="body">
+    <!-- sidebar -->
+    <aside id="sidebar">
+      <div class="side-head">
+        <input id="filter" placeholder="filter sessions…" spellcheck="false">
+      </div>
+      <div id="tree"></div>
+      <div class="side-foot">
+        <button id="add-host" class="btn-primary small">+ Host</button>
+        <button id="add-folder" class="btn-ghost small">+ Folder</button>
+      </div>
+    </aside>
+    <div id="side-resizer" title="drag to resize"></div>
+
+    <!-- main -->
+    <main id="main">
+      <!-- terminals view -->
+      <section id="view-terms" class="view active">
+        <div id="tabrow">
+          <div id="tabbar"></div>
+        </div>
+        <div id="panes">
+          <div id="term-empty" class="empty">
+            <div class="empty-logo">⌁</div>
+            <p>Pick a session from the left to open a terminal.</p>
+          </div>
+        </div>
+        <footer id="statusbar" class="hidden">
+          <span class="st-host"><span class="dot"></span><b id="st-label"></b><span id="st-addr"></span></span>
+          <span class="st-item">CPU <canvas id="st-cpugraph" width="110" height="17" title="last 60s"></canvas><b id="st-cpu">–</b></span>
+          <span class="st-item">RAM <span class="meter"><i id="st-membar"></i></span><b id="st-mem">–</b></span>
+          <span class="st-item">DISK / <span class="meter"><i id="st-diskbar"></i></span><b id="st-disk">–</b></span>
+          <span class="st-item">NET <canvas id="st-netgraph" width="110" height="17" title="last 60s — green ↓ / blue ↑"></canvas><b class="up" id="st-tx">↑0</b> <b class="down" id="st-rx">↓0</b></span>
+          <span class="st-item">UPTIME <b id="st-up">–</b></span>
+          <span class="st-item st-users-wrap">USERS <b id="st-users">–</b>
+            <div id="who-pop"></div>
+          </span>
+          <span class="st-conn" id="st-conn">connected</span>
+        </footer>
+      </section>
+
+      <!-- files view -->
+      <section id="view-files" class="view">
+        <div id="filepanes">
+          <div class="fpane" data-pane="0"></div>
+          <div class="fpane" data-pane="1"></div>
+        </div>
+        <div id="transfers" class="hidden">
+          <div class="tr-head">Transfers <button id="tr-clear" class="btn-ghost small">clear finished</button></div>
+          <div id="tr-list"></div>
+        </div>
+      </section>
+
+      <!-- keys view -->
+      <section id="view-keys" class="view">
+        <div class="page">
+          <h2>Identities &amp; Keys</h2>
+          <h3>Identities</h3>
+          <p class="muted">A saved username + password pair. Pin one to hosts so you never retype credentials.</p>
+          <div id="identlist"></div>
+          <div class="ident-form">
+            <input id="ident-name" placeholder="identity name (e.g. devops @ prod)">
+            <input id="ident-user" placeholder="username" spellcheck="false">
+            <span class="pw-wrap"><input id="ident-pass" type="password" placeholder="password"><button type="button" class="eye" data-for="ident-pass" title="show/hide">👁</button></span>
+            <button id="ident-add" class="btn-primary">Save identity</button>
+          </div>
+          <h3>SSH Keys</h3>
+          <p class="muted">Private keys are stored encrypted on the server and never sent to the browser.</p>
+          <div id="keylist"></div>
+          <h3>Add key</h3>
+          <input id="key-name" placeholder="key name (e.g. id_ed25519 devops)">
+          <textarea id="key-priv" rows="8" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea>
+          <span class="pw-wrap"><input id="key-pass" type="password" placeholder="passphrase (optional)"><button type="button" class="eye" data-for="key-pass" title="show/hide">👁</button></span>
+          <button id="key-add" class="btn-primary">Save key</button>
+        </div>
+      </section>
+
+      <!-- settings view -->
+      <section id="view-settings" class="view">
+        <div class="page">
+          <h2>Import / Export</h2>
+          <h3>Import MobaXterm config</h3>
+          <p class="muted">Upload a <code>.mobaconf</code> backup — SSH bookmarks and folders are imported.
+             Passwords in the file are encrypted by Moba's master password, so set them per host afterwards.</p>
+          <input type="file" id="moba-file" accept=".mobaconf,.ini,.txt">
+          <button id="moba-import" class="btn-primary">Import</button>
+          <span id="moba-result" class="muted"></span>
+          <h3>SSHDeck backup (everything)</h3>
+          <p class="muted">Full export of folders, hosts, identities and SSH keys — <b>including passwords in
+             readable form</b>, so it restores on any SSHDeck instance. Keep the file somewhere safe.</p>
+          <div class="row-gap">
+            <a class="btn-primary" href="/api/export/sshdeck" download>Download full backup (.json)</a>
+            <input type="file" id="deck-file" accept=".json">
+            <button id="deck-import" class="btn-ghost">Restore backup</button>
+            <span id="deck-result" class="muted"></span>
+          </div>
+
+          <h3>Export for MobaXterm</h3>
+          <p class="muted">Bookmarks-only file (no passwords) for importing back into MobaXterm.</p>
+          <a class="btn-ghost" href="/api/export/mobaconf">Download .mobaconf</a>
+
+          <h3>Terminal</h3>
+          <label class="chk"><input type="checkbox" id="hl-toggle">
+            Output highlighting — colorize IPs, MACs, UP/DOWN keywords (Moba-style, auto-off in nano/vim/htop)</label>
+
+          <h3>Theme</h3>
+          <p class="muted">Paste a theme JSON and apply. Share the JSON with anyone to share your style.
+             Keys: <code>ui</code> (bg, bg2, bg3, panel, border, fg, muted, accent, accent2, danger)
+             and <code>terminal</code> (xterm theme: background, foreground, cursor, black…brightWhite).</p>
+          <textarea id="theme-json" rows="10" spellcheck="false" placeholder='{"ui":{"accent":"#e2b93d"},"terminal":{"background":"#101014"}}'></textarea>
+          <div class="row-gap">
+            <button id="theme-apply" class="btn-primary">Apply theme</button>
+            <button id="theme-current" class="btn-ghost">Load current</button>
+            <button id="theme-reset" class="btn-ghost">Reset to default</button>
+            <span id="theme-msg" class="muted"></span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- host modal -->
+<div id="modal-bg" class="hidden">
+  <div id="host-modal" class="modal">
+    <h3 id="hm-title">Add host</h3>
+    <div class="grid2">
+      <label>Label<input id="hm-label" placeholder="uu-mongo-0"></label>
+      <label>Folder<select id="hm-folder"></select></label>
+      <label>Hostname / IP<input id="hm-host" placeholder="192.168.6.202" spellcheck="false"></label>
+      <label>Port<input id="hm-port" type="number" value="22"></label>
+      <label>Username<input id="hm-user" placeholder="devops" spellcheck="false"></label>
+      <label>Auth<select id="hm-auth"><option value="password">Password</option><option value="identity">Identity</option><option value="key">SSH key</option></select></label>
+      <label id="hm-pw-wrap">Password<span class="pw-wrap"><input id="hm-pw" type="password" placeholder=""><button type="button" class="eye" data-for="hm-pw" title="show/hide">👁</button></span></label>
+      <label id="hm-key-wrap" class="hidden">Key<select id="hm-key"></select></label>
+      <label id="hm-ident-wrap" class="hidden">Identity<select id="hm-ident"></select></label>
+    </div>
+    <div class="modal-actions">
+      <button id="hm-delete" class="btn-danger hidden">Delete</button>
+      <span class="spacer"></span>
+      <button id="hm-cancel" class="btn-ghost">Cancel</button>
+      <button id="hm-save" class="btn-primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/vendor/xterm.js"></script>
+<script src="/static/vendor/addon-fit.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

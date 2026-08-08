@@ -1,0 +1,6 @@
+# runtime data — contains the SQLite DB and the encryption key. NEVER commit.
+data/
+
+__pycache__/
+*.pyc
+.venv/

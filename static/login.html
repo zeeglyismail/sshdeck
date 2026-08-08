@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSHDeck — Sign in</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="login-body">
+<div class="login-card">
+  <div class="login-logo">SSH<span>Deck</span></div>
+  <div class="login-sub">your fleet, one tab</div>
+  <div id="err" class="login-err"></div>
+  <input id="u" placeholder="username" autocomplete="username" spellcheck="false">
+  <input id="p" type="password" placeholder="password" autocomplete="current-password">
+  <button id="go" class="btn-primary">Sign in</button>
+  <div class="login-toggle">
+    <span id="mode-label">No account?</span>
+    <a id="toggle" href="#">Sign up</a>
+  </div>
+</div>
+<script>
+let signup = false;
+const $ = s => document.querySelector(s);
+$('#toggle').onclick = e => {
+  e.preventDefault();
+  signup = !signup;
+  $('#go').textContent = signup ? 'Create account' : 'Sign in';
+  $('#mode-label').textContent = signup ? 'Have an account?' : 'No account?';
+  $('#toggle').textContent = signup ? 'Sign in' : 'Sign up';
+  $('#err').textContent = '';
+};
+async function submit() {
+  $('#err').textContent = '';
+  const body = JSON.stringify({username: $('#u').value, password: $('#p').value});
+  const r = await fetch(signup ? '/api/signup' : '/api/login', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body});
+  if (r.ok) { location.href = '/'; return; }
+  const d = await r.json().catch(() => ({}));
+  $('#err').textContent = d.detail || 'Failed';
+}
+$('#go').onclick = submit;
+document.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+$('#u').focus();
+</script>
+</body>
+</html>
