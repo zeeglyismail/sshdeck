@@ -10,6 +10,7 @@
 
 **Terminal**
 - Full xterm.js terminal with tabs, 256-color, tmux/vim/nano friendly
+- **Press Enter to reconnect** a dropped session in place — same tab, scrollback intact (perfect for host reboots: keep hitting Enter until the box is back)
 - VS Code-style font zoom (Ctrl+scroll / Ctrl+±), thin bar cursor
 - Moba-style copy/paste: select-to-copy, middle-click paste, Ctrl+Shift+C/V, browser right-click menu untouched
 - Client-side output highlighting (IPs, MACs, UP/DOWN keywords) — auto-disabled inside full-screen apps, toggleable in Settings
@@ -34,6 +35,7 @@
 - **Host-to-host transfer**: drag files/directories from one pane to the other — streamed server-side, never touches your PC
 - Multi-select (Ctrl/Shift+click), upload via drag from desktop, download, mkdir, rename, chmod, recursive delete
 - Live transfer progress list
+- Searchable host picker per pane; ⏻ releases the pane's SFTP session without touching open terminals
 
 **Platform**
 - Multi-user: sign up / sign in, every user has their own sessions, keys, identities
