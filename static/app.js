@@ -459,46 +459,65 @@ function createInst(tab, host) {
   });
   wrapEl.addEventListener("mousedown", () => focusInst(tab, inst));
 
-  const ws = new WebSocket(wsProto + location.host + "/ws/term/" + host.id);
-  inst.ws = ws;
-  ws.binaryType = "arraybuffer";
-  const decoder = new TextDecoder();
-  ws.onmessage = ev => {
-    let s = decoder.decode(ev.data, { stream: true });
-    // highlight only on the normal buffer — full-screen apps (nano/vim/htop) untouched
-    if (HL_ON && term.buffer.active.type === "normal") s = hlApply(s);
-    term.write(s);
-  };
-  ws.onopen = () => sendResize();
-  ws.onclose = () => {
-    term.write("\r\n\x1b[1;33m— disconnected —\x1b[0m\r\n");
-    inst.dead = true;
-    updateStatusConn();
-  };
-  term.onData(d => sendInput(tab, inst, d));
+  function connectTerm() {
+    const decoder = new TextDecoder();
+    const ws = new WebSocket(wsProto + location.host + "/ws/term/" + host.id);
+    inst.ws = ws;
+    ws.binaryType = "arraybuffer";
+    ws.onmessage = ev => {
+      let s = decoder.decode(ev.data, { stream: true });
+      // highlight only on the normal buffer — full-screen apps (nano/vim/htop) untouched
+      if (HL_ON && term.buffer.active.type === "normal") s = hlApply(s);
+      term.write(s);
+    };
+    ws.onopen = () => { inst.dead = false; updateStatusConn(); sendResize(); };
+    ws.onclose = () => {
+      if (inst.disposed) return;
+      inst.dead = true;
+      term.write("\r\n\x1b[1;33m— disconnected — press Enter to reconnect —\x1b[0m\r\n");
+      updateStatusConn();
+    };
+  }
+
+  function connectStats() {
+    const statsWs = new WebSocket(wsProto + location.host + "/ws/stats/" + host.id);
+    inst.statsWs = statsWs;
+    statsWs.onmessage = ev => {
+      inst.stats = JSON.parse(ev.data);
+      if (!inst.stats.error) {
+        inst.cpuHist.push(inst.stats.cpu);
+        if (inst.cpuHist.length > 120) inst.cpuHist.shift();   // 120 × 0.5s = last 60s
+        inst.netHist.push({ rx: inst.stats.rx_rate, tx: inst.stats.tx_rate });
+        if (inst.netHist.length > 120) inst.netHist.shift();
+      }
+      if (activeTab === tab.id && tab.focused === inst) renderStats(inst);
+    };
+  }
+
+  // dead terminal + Enter = reconnect in place, scrollback intact
+  term.onData(d => {
+    if (inst.dead) {
+      if (d.includes("\r")) {
+        term.write("\x1b[36m… reconnecting …\x1b[0m\r\n");
+        connectTerm();
+        if (!inst.statsWs || inst.statsWs.readyState > 1) connectStats();
+      }
+      return;
+    }
+    sendInput(tab, inst, d);
+  });
 
   function sendResize() {
     try { fit.fit(); } catch (e) {}
-    if (ws.readyState === 1) ws.send(JSON.stringify({ t: "r", c: term.cols, r: term.rows }));
+    if (inst.ws && inst.ws.readyState === 1)
+      inst.ws.send(JSON.stringify({ t: "r", c: term.cols, r: term.rows }));
   }
   inst.sendResize = sendResize;
   const ro = new ResizeObserver(() => { if (tab.el.classList.contains("active")) sendResize(); });
   ro.observe(wrapEl);
 
-  // stats channel
-  const statsWs = new WebSocket(wsProto + location.host + "/ws/stats/" + host.id);
-  inst.statsWs = statsWs;
-  statsWs.onmessage = ev => {
-    inst.stats = JSON.parse(ev.data);
-    if (!inst.stats.error) {
-      inst.cpuHist.push(inst.stats.cpu);
-      if (inst.cpuHist.length > 120) inst.cpuHist.shift();   // 120 × 0.5s = last 60s
-      inst.netHist.push({ rx: inst.stats.rx_rate, tx: inst.stats.tx_rate });
-      if (inst.netHist.length > 120) inst.netHist.shift();
-    }
-    if (activeTab === tab.id && tab.focused === inst) renderStats(inst);
-  };
-
+  connectTerm();
+  connectStats();
   return inst;
 }
 
@@ -519,6 +538,7 @@ function focusInst(tab, inst) {
 }
 
 function disposeInst(inst) {
+  inst.disposed = true;
   try { inst.ws.close(); } catch (e) {}
   try { inst.statsWs.close(); } catch (e) {}
   try { inst.term.dispose(); } catch (e) {}
