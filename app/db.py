@@ -36,6 +36,15 @@ CREATE TABLE IF NOT EXISTS identities (
     username TEXT NOT NULL,
     password_enc TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tunnels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    host_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    listen_port INTEGER NOT NULL,
+    dest_host TEXT NOT NULL DEFAULT 'localhost',
+    dest_port INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS hosts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,

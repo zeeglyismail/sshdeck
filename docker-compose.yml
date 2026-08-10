@@ -4,6 +4,8 @@ services:
     container_name: sshdeck
     ports:
       - "8022:8000"
+      # port-forwarding tunnels listen inside the container — publish a range for them
+      - "15000-15020:15000-15020"
     volumes:
       - ./data:/data
     restart: unless-stopped

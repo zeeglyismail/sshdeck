@@ -257,6 +257,7 @@ function showView(name) {
   $$(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.view === name));
   $$(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + name));
   if (name === "terms" && activeTab) setTimeout(() => fitActive(), 10);
+  if (name === "tunnels") loadTunnels();
 }
 
 /* ================= terminals ================= */
@@ -787,6 +788,58 @@ $("#add-host").onclick = () => openHostModal(null);
 $("#add-folder").onclick = async () => {
   const name = prompt("Folder name:");
   if (name && name.trim()) { await api("/api/folders", { json: { name } }); loadState(); }
+};
+
+/* ================= tunnels (port forwarding) ================= */
+
+async function loadTunnels() {
+  const hsel = $("#tun-host");
+  hsel.innerHTML = STATE.hosts.map(h => `<option value="${h.id}">${esc(h.label)}</option>`).join("");
+  let r;
+  try { r = await api("/api/tunnels"); } catch (e) { return; }
+  const el = $("#tunlist");
+  el.innerHTML = r.tunnels.length ? "" : '<p class="muted">No tunnels yet.</p>';
+  for (const t of r.tunnels) {
+    const item = document.createElement("div");
+    item.className = "key-item";
+    item.innerHTML =
+      `<span class="tdot ${t.active ? "on" : ""}"></span>` +
+      `<span class="kname">${esc(t.name)}</span>` +
+      `<span class="muted">:${t.listen_port} → ${esc(t.dest_host)}:${t.dest_port} via ${esc(t.host_label)}</span>` +
+      `<button class="btn-${t.active ? "danger" : "primary"} small tgl">${t.active ? "Stop" : "Start"}</button>` +
+      `<button class="btn-ghost small del">Delete</button>`;
+    item.querySelector(".tgl").onclick = async () => {
+      try {
+        await api(`/api/tunnels/${t.id}/${t.active ? "stop" : "start"}`, { method: "POST" });
+        loadTunnels();
+      } catch (e) { alert(e.message); }
+    };
+    item.querySelector(".del").onclick = async () => {
+      if (!confirm(`Delete tunnel "${t.name}"?`)) return;
+      await api(`/api/tunnels/${t.id}`, { method: "DELETE" });
+      loadTunnels();
+    };
+    el.appendChild(item);
+  }
+}
+
+$("#tun-add").onclick = async () => {
+  const body = {
+    name: $("#tun-name").value.trim(),
+    host_id: parseInt($("#tun-host").value),
+    listen_port: parseInt($("#tun-lport").value),
+    dest_host: $("#tun-dhost").value.trim() || "localhost",
+    dest_port: parseInt($("#tun-dport").value),
+  };
+  if (!body.host_id || !body.listen_port || !body.dest_port) {
+    alert("SSH host, listen port and destination port are required");
+    return;
+  }
+  try {
+    await api("/api/tunnels", { json: body });
+    $("#tun-name").value = $("#tun-lport").value = $("#tun-dport").value = "";
+    loadTunnels();
+  } catch (e) { alert(e.message); }
 };
 
 /* ================= identities & keys ================= */

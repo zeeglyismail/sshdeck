@@ -37,6 +37,12 @@
 - Live transfer progress list
 - Searchable host picker per pane; ⏻ releases the pane's SFTP session without touching open terminals
 
+**Tunnels (port forwarding)**
+- Local forwards through any saved host: `<sshdeck-server>:PORT` → SSH host → destination
+- Saved tunnel definitions with one-click start/stop and live status
+- Container publishes ports 15000–15020 for tunnels by default (adjust in `docker-compose.yml`)
+- (X11 forwarding is intentionally out of scope — a browser has no X server to draw on; that's desktop-app territory)
+
 **Platform**
 - Multi-user: sign up / sign in, every user has their own sessions, keys, identities
 - Theme JSON: paste a JSON in Settings to restyle the whole UI + terminal; share the file with anyone
@@ -110,7 +116,8 @@ Back up both **together** — the DB is unreadable without the key. Move the app
 - Manual sort order for sessions
 - SSH host key verification (TOFU)
 - Transfer acceleration for very large files (streamed exec instead of SFTP)
-- Port forwarding / tunnels UI
+- Remote / dynamic (SOCKS) forwarding on top of the local tunnels
+- Native desktop binaries (PyInstaller, Windows first) alongside Docker
 - TOTP two-factor login
 
 ## License

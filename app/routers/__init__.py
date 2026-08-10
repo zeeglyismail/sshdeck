@@ -7,7 +7,7 @@ sftp         per-host file manager operations
 transfers    server-side host-to-host copies
 portability  MobaXterm import / export
 """
-from . import account, credentials, inventory, portability, sftp, transfers
+from . import account, credentials, inventory, portability, sftp, transfers, tunnels
 
 all_routers = [
     account.router,
@@ -15,5 +15,6 @@ all_routers = [
     credentials.router,
     sftp.router,
     transfers.router,
+    tunnels.router,
     portability.router,
 ]
