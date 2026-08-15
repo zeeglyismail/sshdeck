@@ -1072,9 +1072,14 @@ $("#tr-clear").onclick = () => invoke("transfers_clear");
 /* ---------- tunnels (M4) ---------- */
 
 const TUN_HINT = {
-  local:  "Connect your app to <b>localhost:LISTEN</b>; traffic exits the SSH host toward <b>destination</b> (e.g. a DB bound to 127.0.0.1 on the server, or another box the server can reach).",
-  remote: "The <b>server</b> listens on LISTEN; anything connecting there is tunneled back to <b>destination</b> as seen from <b>this machine</b> (e.g. expose your local dev server on port 8080 to the server).",
-  socks:  "A SOCKS5 proxy on <b>localhost:LISTEN</b>. Point a browser/app at it and all its traffic goes out through the SSH host — destination not needed.",
+  local:  "Example: Elasticsearch on the server at <code>localhost:9200</code> → set <b>Port on this PC</b> = 15200, <b>Destination</b> = localhost : 9200 → open <code>https://localhost:15200</code> here. Destination can also be another box the server can reach (e.g. 192.168.6.202:8081).",
+  remote: "The <b>server</b> opens the listen port; connections there tunnel back to a port on <b>this PC</b>. Example: show your local dev site (localhost:3000) to a colleague on the server: <b>Port on server</b> = 8080, <b>Destination</b> = localhost : 3000. ⚠ The server port must be free — pick something not already used there.",
+  socks:  "A SOCKS5 proxy on <b>localhost:PORT</b> here. Point a browser/app at it and all its traffic goes out through the SSH host — no destination needed. Handy for reaching an entire internal network.",
+};
+const TUN_LABELS = {
+  local:  ["Port on this PC", "Destination (as seen from the server)"],
+  remote: ["Port on the SERVER", "Destination (as seen from THIS PC)"],
+  socks:  ["Proxy port on this PC", ""],
 };
 
 async function loadTunnels() {
@@ -1119,7 +1124,9 @@ function tunKindChanged() {
   const k = $("#tun-kind").value;
   $("#tun-dest-wrap").classList.toggle("hidden", k === "socks");
   $("#tun-hint").innerHTML = TUN_HINT[k];
-  $("#tun-lport").placeholder = k === "socks" ? "1080" : k === "remote" ? "8080" : "15432";
+  $("#tun-lport-label").textContent = TUN_LABELS[k][0];
+  $("#tun-dest-label").textContent = TUN_LABELS[k][1];
+  $("#tun-lport").placeholder = k === "socks" ? "1080" : k === "remote" ? "8080" : "15200";
 }
 $("#tun-kind").onchange = tunKindChanged;
 tunKindChanged();

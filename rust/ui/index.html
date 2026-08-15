@@ -75,12 +75,12 @@
             <label>Name<input id="tun-name" placeholder="pg via jumphost"></label>
             <label>SSH host<select id="tun-host"></select></label>
             <label>Type<select id="tun-kind">
-              <option value="local">Local  —  localhost:PORT → host → destination</option>
-              <option value="remote">Remote  —  server:PORT → back to a port on this machine</option>
-              <option value="socks">SOCKS5 proxy  —  localhost:PORT, browse via the host</option>
+              <option value="local">Local  —  reach something ON/behind the server from this PC (most common)</option>
+              <option value="remote">Remote  —  expose something on THIS PC to the server</option>
+              <option value="socks">SOCKS5 proxy  —  browse the internet/LAN through the server</option>
             </select></label>
-            <label id="tun-lport-wrap">Listen port<input id="tun-lport" type="number" placeholder="15432"></label>
-            <label id="tun-dest-wrap">Destination<div class="row-gap">
+            <label id="tun-lport-wrap"><span id="tun-lport-label">Port on this PC</span><input id="tun-lport" type="number" placeholder="15432"></label>
+            <label id="tun-dest-wrap"><span id="tun-dest-label">Destination (as seen from the server)</span><div class="row-gap">
               <input id="tun-dhost" value="localhost" spellcheck="false" style="flex:2">
               <input id="tun-dport" type="number" placeholder="5432" style="flex:1"></div></label>
           </div>

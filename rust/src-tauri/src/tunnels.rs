@@ -171,7 +171,8 @@ pub async fn tunnel_start(app: AppHandle, pool: State<'_, SshPool>, active: Stat
             let mut h = crate::ssh::connect_with(&spec, Client { forwarded: Some(fwd_tx) }).await?;
             h.tcpip_forward("0.0.0.0", listen_port as u32)
                 .await
-                .map_err(|e| format!("server refused remote listen on {listen_port}: {e}"))?;
+                .map_err(|e| format!(
+                    "server refused to listen on port {listen_port} ({e}). Usually that port is already                      in use ON THE SERVER, or sshd has GatewayPorts/AllowTcpForwarding off.                      Tip: to reach a service running on the server from this PC you want a LOCAL tunnel,                      not remote."))?;
             active.0.lock().unwrap().insert(id, stop_tx);
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
