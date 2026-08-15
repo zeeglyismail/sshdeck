@@ -78,7 +78,7 @@ function applyTheme(theme, save = true) {
     document.documentElement.style.setProperty("--" + k, v);
   GRAPH = { cpu: ACTIVE_THEME.ui.accent, tx: ACTIVE_THEME.ui.accent2 };
   document.documentElement.style.setProperty("--cursor", ACTIVE_THEME.terminal.cursor || "#ffffff");
-  for (const t of TABS.values()) t.term.options.theme = ACTIVE_THEME.terminal;
+  for (const tab of TABS.values()) for (const i of (tab.insts || [])) i.term.options.theme = ACTIVE_THEME.terminal;
   renderThemeChips();
   if (save) localStorage.setItem("deck.theme", JSON.stringify(theme));
 }
@@ -395,29 +395,52 @@ $("#filter").addEventListener("input", renderTree);
 
 /* ---------- terminals ---------- */
 
-function makeTab(title) {
-  const id = ++seq;
-  $("#empty").style.display = "none";
-  const tabEl = document.createElement("div");
-  tabEl.className = "tab";
-  tabEl.innerHTML = `<span class="tlabel">${esc(title)}</span><button class="x" title="close">✕</button>`;
-  $("#tabbar").appendChild(tabEl);
-  const pane = document.createElement("div");
-  pane.className = "pane";
-  const el = document.createElement("div");
-  el.className = "term-el";
-  pane.appendChild(el);
-  $("#panes").appendChild(pane);
+/* ================= terminals: tabs → split instances (local or SSH) ================= */
+
+const PREFS = {
+  cursorStyle: localStorage.getItem("deck.cursorStyle") || "bar",       // bar | block | underline
+  cursorMotion: localStorage.getItem("deck.cursorMotion") || "phase",   // phase | blink | steady
+  warnCloseTab: localStorage.getItem("deck.warnCloseTab") !== "0",
+  warnQuit: localStorage.getItem("deck.warnQuit") !== "0",
+};
+function savePref(k, v) {
+  PREFS[k] = v;
+  localStorage.setItem("deck." + k, typeof v === "boolean" ? (v ? "1" : "0") : v);
+}
+function applyCursorPrefs() {
+  document.body.dataset.cursorMotion = PREFS.cursorMotion;
+  for (const tab of TABS.values())
+    for (const i of tab.insts) {
+      i.term.options.cursorStyle = PREFS.cursorStyle;
+      i.term.options.cursorBlink = PREFS.cursorMotion === "blink";
+    }
+}
+
+/* one terminal instance inside a tab (a split) */
+function createInst(tab, source) {
+  // source: { kind: "local" } | { kind: "ssh", host }
+  const wrapEl = document.createElement("div");
+  wrapEl.className = "tsplit";
+  const title = source.kind === "local" ? "PowerShell" : source.host.label;
+  wrapEl.innerHTML =
+    `<div class="tsplit-bar"><span class="tname">${esc(title)}</span>` +
+    `<button class="tb-bc on" title="include this split in MultiExec broadcast">⌨</button>` +
+    `<button class="tb-x" title="close split">✕</button></div>` +
+    `<div class="term-el"></div>`;
+  const el = wrapEl.querySelector(".term-el");
 
   const term = new Terminal({
     fontFamily: '"Cascadia Code", Consolas, monospace', fontSize: FONT_SIZE,
-    theme: ACTIVE_THEME.terminal, cursorStyle: "bar", cursorBlink: false, scrollback: 50000,
+    theme: ACTIVE_THEME.terminal, cursorStyle: PREFS.cursorStyle,
+    cursorBlink: PREFS.cursorMotion === "blink", scrollback: 50000,
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(el);
 
-  // zoom + copy/paste parity with the web app
+  const inst = { id: ++seq, tab, source, host: source.host || null, wrapEl, term, fit,
+                 unsubs: [], dead: false, bcast: true, stats: null, prev: {}, cpuHist: [], netHist: [] };
+
   el.addEventListener("wheel", ev => {
     if (!ev.ctrlKey) return;
     ev.preventDefault();
@@ -427,19 +450,262 @@ function makeTab(title) {
     const sel = term.getSelection();
     if (sel) navigator.clipboard.writeText(sel).catch(() => {});
   });
+  wrapEl.addEventListener("mousedown", () => focusInst(tab, inst));
 
-  return { id, tabEl, pane, term, fit };
+  inst.sendResize = () => {
+    try { fit.fit(); } catch (e) {}
+    if (source.kind === "local") invoke("pty_resize", { id: inst.id, cols: term.cols, rows: term.rows });
+    else if (!inst.dead) invoke("ssh_resize", { id: inst.id, cols: term.cols, rows: term.rows });
+  };
+  new ResizeObserver(() => { if (tab.pane.classList.contains("active")) inst.sendResize(); }).observe(wrapEl);
+
+  // typing → this instance, or every broadcast-enabled instance of the tab in MultiExec
+  term.onData(d => {
+    if (tab.broadcast) {
+      for (const i of tab.insts) if (i.bcast) sendTo(i, d);
+    } else sendTo(inst, d);
+  });
+
+  wrapEl.querySelector(".tb-x").onclick = e => { e.stopPropagation(); closeInst(tab, inst); };
+  wrapEl.querySelector(".tb-bc").onclick = e => {
+    e.stopPropagation();
+    inst.bcast = !inst.bcast;
+    e.currentTarget.classList.toggle("on", inst.bcast);
+  };
+  return inst;
 }
 
-function registerTab(t) {
-  TABS.set(t.id, t);
-  t.tabEl.onclick = e => {
-    if (e.target.classList.contains("x")) { t.close(); return; }
-    activateTab(t.id);
+function sendTo(inst, d) {
+  if (inst.source.kind === "local") { invoke("pty_write", { id: inst.id, data: d }); return; }
+  if (inst.dead) {
+    if (d.includes("\r")) {
+      inst.dead = false;
+      inst.term.write("\x1b[36m… reconnecting …\x1b[0m\r\n");
+      invoke("ssh_spawn", { id: inst.id, hostId: inst.host.id })
+        .then(() => setTimeout(inst.sendResize, 400))
+        .catch(e => { inst.dead = true; inst.term.write(`\r\n\x1b[1;31m✗ ${e}\x1b[0m\r\n`); });
+    }
+    return;
+  }
+  invoke("ssh_write", { id: inst.id, data: d });
+}
+
+async function connectInst(inst) {
+  const t = inst.term;
+  inst.unsubs.push(await listen(`pty-out-${inst.id}`, ev => t.write(new Uint8Array(ev.payload))));
+  if (inst.source.kind === "local") {
+    inst.unsubs.push(await listen(`pty-exit-${inst.id}`, () => t.write("\r\n\x1b[1;33m— process exited —\x1b[0m\r\n")));
+    await invoke("pty_spawn", { id: inst.id, shell: null });
+    setTimeout(inst.sendResize, 50);
+    return;
+  }
+  inst.unsubs.push(await listen(`pty-exit-${inst.id}`, () => {
+    inst.dead = true;
+    t.write("\r\n\x1b[1;33m— disconnected — press Enter to reconnect —\x1b[0m\r\n");
+    if (isFocused(inst)) updateConn(inst);
+  }));
+  inst.unsubs.push(await listen(`stats-${inst.id}`, ev => {
+    const s = parseStats(ev.payload, inst.prev);
+    if (!s) return;
+    inst.stats = s;
+    inst.cpuHist.push(s.cpu); if (inst.cpuHist.length > 60) inst.cpuHist.shift();
+    inst.netHist.push({ rx: s.rx_rate, tx: s.tx_rate }); if (inst.netHist.length > 60) inst.netHist.shift();
+    if (isFocused(inst)) { renderStats(inst); updateConn(inst); }
+  }));
+  try {
+    await invoke("ssh_spawn", { id: inst.id, hostId: inst.host.id });
+    setTimeout(inst.sendResize, 400);
+  } catch (e) {
+    inst.dead = true;
+    t.write(`\r\n\x1b[1;31m✗ ${e}\x1b[0m\r\n`);
+  }
+}
+
+function isFocused(inst) {
+  const tab = TABS.get(activeTab);
+  return tab && (tab.focused || tab.insts[0]) === inst;
+}
+
+function disposeInst(inst) {
+  inst.unsubs.forEach(u => u());
+  if (inst.source.kind === "local") invoke("pty_kill", { id: inst.id });
+  else invoke("ssh_kill", { id: inst.id });
+  try { inst.term.dispose(); } catch (e) {}
+}
+
+function instAlive(inst) {
+  return inst.source.kind === "local" ? true : !inst.dead;
+}
+
+/* ---- tabs ---- */
+
+function makeTab(title) {
+  const id = ++seq;
+  $("#empty").style.display = "none";
+  const tabEl = document.createElement("div");
+  tabEl.className = "tab";
+  tabEl.innerHTML = `<span class="tlabel">${esc(title)}</span><button class="x" title="close">✕</button>`;
+  $("#tabbar").appendChild(tabEl);
+  const pane = document.createElement("div");
+  pane.className = "pane";
+  const root = document.createElement("div");
+  root.className = "split root";
+  root.style.flexDirection = "row";
+  pane.appendChild(root);
+  $("#panes").appendChild(pane);
+  const tab = { id, tabEl, pane, root, insts: [], focused: null, broadcast: false };
+  TABS.set(id, tab);
+  tabEl.onclick = e => {
+    if (e.target.classList.contains("x")) { closeTab(tab); return; }
+    activateTab(id);
   };
-  t.tabEl.addEventListener("mousedown", e => { if (e.button === 1) e.preventDefault(); });
-  t.tabEl.addEventListener("auxclick", e => { if (e.button === 1) { e.preventDefault(); t.close(); } });
-  activateTab(t.id);
+  tabEl.addEventListener("mousedown", e => { if (e.button === 1) e.preventDefault(); });
+  tabEl.addEventListener("auxclick", e => { if (e.button === 1) { e.preventDefault(); closeTab(tab); } });
+  return tab;
+}
+
+async function openTab(source) {
+  showView("terms");
+  const tab = makeTab(source.kind === "local" ? "PowerShell" : source.host.label);
+  const inst = createInst(tab, source);
+  tab.root.appendChild(inst.wrapEl);
+  tab.insts.push(inst);
+  updateTabChrome(tab);
+  activateTab(tab.id);
+  await connectInst(inst);
+}
+const openLocalTerm = () => openTab({ kind: "local" });
+const openSshTerminal = host => openTab({ kind: "ssh", host });
+$("#new-local").onclick = openLocalTerm;
+
+/* split the focused instance of the active tab with a new source */
+async function splitActive(source, dir) {
+  const tab = TABS.get(activeTab);
+  if (!tab) { openTab(source); return; }
+  const focused = tab.focused || tab.insts[0];
+  const w = focused.wrapEl;
+  const parent = w.parentElement;
+  let container;
+  if (parent.classList.contains("split") && parent.style.flexDirection === dir) container = parent;
+  else {
+    container = document.createElement("div");
+    container.className = "split";
+    container.style.flexDirection = dir;
+    parent.insertBefore(container, w);
+    container.appendChild(w);
+  }
+  const inst = createInst(tab, source);
+  container.appendChild(inst.wrapEl);
+  tab.insts.push(inst);
+  updateTabChrome(tab);
+  focusInst(tab, inst);
+  setTimeout(() => tab.insts.forEach(i => i.sendResize()), 10);
+  await connectInst(inst);
+  inst.term.focus();
+}
+
+/* the split-source picker: local terminal or any saved host */
+function pickSplitSource(dir) {
+  return new Promise(resolve => {
+    const bg = document.createElement("div");
+    bg.id = "choice-bg";
+    const hosts = STATE.hosts.map(h => `<option value="${h.id}">${esc(h.label)} (${esc(h.username)})</option>`).join("");
+    bg.innerHTML = `<div class="modal choice"><h3>Split ${dir === "row" ? "right" : "down"}</h3>
+      <p>Open in the new split:</p>
+      <div class="row-gap" style="margin-bottom:10px">
+        <button class="btn-primary pick-local">Local terminal (PowerShell)</button>
+      </div>
+      <div class="row-gap"><select class="pick-host" style="flex:1">${hosts}</select>
+        <button class="btn-primary pick-ssh">Open host</button></div>
+      <div class="modal-actions"><button class="btn-ghost cancel">Cancel</button></div></div>`;
+    const done = v => { bg.remove(); resolve(v); };
+    bg.querySelector(".pick-local").onclick = () => done({ kind: "local" });
+    bg.querySelector(".pick-ssh").onclick = () => {
+      const h = STATE.hosts.find(x => x.id === parseInt(bg.querySelector(".pick-host").value));
+      done(h ? { kind: "ssh", host: h } : null);
+    };
+    bg.querySelector(".cancel").onclick = () => done(null);
+    bg.addEventListener("mousedown", e => { if (e.target === bg) done(null); });
+    document.body.appendChild(bg);
+    bg.querySelector(".pick-host").focus();
+  });
+}
+$("#split-h").onclick = async () => { const s = await pickSplitSource("row"); if (s) splitActive(s, "row"); };
+$("#split-v").onclick = async () => { const s = await pickSplitSource("column"); if (s) splitActive(s, "column"); };
+$("#bcast").onclick = () => {
+  const tab = TABS.get(activeTab);
+  if (!tab) return;
+  tab.broadcast = !tab.broadcast;
+  $("#bcast").classList.toggle("on", tab.broadcast);
+  tab.pane.classList.toggle("bc", tab.broadcast);
+};
+
+function focusInst(tab, inst) {
+  if (!inst) return;
+  tab.focused = inst;
+  for (const i of tab.insts) i.wrapEl.classList.toggle("focused", i === inst);
+  if (activeTab === tab.id) {
+    if (inst.host) {
+      $("#statusbar").classList.remove("hidden");
+      $("#st-label").textContent = inst.host.label;
+      $("#st-addr").textContent = ` · ${inst.host.hostname}:${inst.host.port}`;
+      renderStats(inst);
+      updateConn(inst);
+    } else $("#statusbar").classList.add("hidden");
+  }
+}
+
+async function closeInst(tab, inst) {
+  if (PREFS.warnCloseTab && instAlive(inst) && inst.source.kind === "ssh") {
+    const c = await choose("Close this session?", `Live SSH session to <b>${esc(inst.host.label)}</b> will be disconnected.`,
+      [{ label: "Cancel", value: null }, { label: "Close", value: "yes", cls: "btn-danger" }]);
+    if (c !== "yes") return;
+  }
+  disposeInst(inst);
+  tab.insts = tab.insts.filter(i => i !== inst);
+  const parent = inst.wrapEl.parentElement;
+  inst.wrapEl.remove();
+  let p = parent;
+  while (p && p.classList.contains("split") && !p.classList.contains("root")) {
+    if (p.children.length === 0) { const up = p.parentElement; p.remove(); p = up; }
+    else if (p.children.length === 1) { p.replaceWith(p.firstElementChild); break; }
+    else break;
+  }
+  if (!tab.insts.length) { removeTab(tab); return; }
+  if (tab.focused === inst) focusInst(tab, tab.insts[0]);
+  updateTabChrome(tab);
+  setTimeout(() => tab.insts.forEach(i => i.sendResize()), 10);
+}
+
+function updateTabChrome(tab) {
+  const multi = tab.insts.length > 1;
+  tab.pane.classList.toggle("multi", multi);
+  const first = tab.insts[0];
+  const base = first.source.kind === "local" ? "PowerShell" : first.host.label;
+  tab.tabEl.querySelector(".tlabel").textContent = multi ? `${base} ⊞${tab.insts.length}` : base;
+}
+
+async function closeTab(tab) {
+  const live = tab.insts.filter(i => i.source.kind === "ssh" && instAlive(i));
+  if (PREFS.warnCloseTab && live.length) {
+    const c = await choose("Close this tab?",
+      `${live.length} live SSH session${live.length > 1 ? "s" : ""} will be disconnected: <span class="muted mono">${live.map(i => esc(i.host.label)).join(", ")}</span>`,
+      [{ label: "Cancel", value: null }, { label: "Close", value: "yes", cls: "btn-danger" }]);
+    if (c !== "yes") return;
+  }
+  removeTab(tab);
+}
+
+function removeTab(tab) {
+  tab.insts.forEach(disposeInst);
+  tab.pane.remove();
+  tab.tabEl.remove();
+  TABS.delete(tab.id);
+  if (activeTab === tab.id) {
+    const last = [...TABS.keys()].pop();
+    if (last) activateTab(last);
+    else { activeTab = null; $("#statusbar").classList.add("hidden"); $("#empty").style.display = ""; }
+  }
 }
 
 function activateTab(id) {
@@ -448,128 +714,41 @@ function activateTab(id) {
     t.pane.classList.toggle("active", tid === id);
     t.tabEl.classList.toggle("active", tid === id);
   }
-  const t = TABS.get(id);
-  if (t) {
-    if (t.host) {
-      $("#statusbar").classList.remove("hidden");
-      $("#st-label").textContent = t.host.label;
-      $("#st-addr").textContent = ` · ${t.host.hostname}:${t.host.port}`;
-      renderStats(t);
-      updateConn(t);
-    } else {
-      $("#statusbar").classList.add("hidden");
-    }
-    setTimeout(() => { t.sendResize(); t.term.focus(); }, 10);
-  }
-}
-
-function removeTab(t) {
-  t.unsubs.forEach(u => u());
-  t.term.dispose();
-  t.pane.remove();
-  t.tabEl.remove();
-  TABS.delete(t.id);
-  if (activeTab === t.id) {
-    const last = [...TABS.keys()].pop();
-    if (last) activateTab(last);
-    else { activeTab = null; $("#statusbar").classList.add("hidden"); $("#empty").style.display = ""; }
+  const tab = TABS.get(id);
+  if (tab) {
+    $("#bcast").classList.toggle("on", tab.broadcast);
+    focusInst(tab, tab.focused || tab.insts[0]);
+    setTimeout(() => {
+      tab.insts.forEach(i => i.sendResize());
+      (tab.focused || tab.insts[0]).term.focus();
+    }, 10);
   }
 }
 
 function fitActive() {
-  const t = TABS.get(activeTab);
-  if (t) t.sendResize();
+  const tab = TABS.get(activeTab);
+  if (tab) tab.insts.forEach(i => i.sendResize());
 }
 window.addEventListener("resize", fitActive);
 
 function setFontSize(size) {
   FONT_SIZE = Math.min(28, Math.max(7, size));
   localStorage.setItem("deck.fontsize", FONT_SIZE);
-  for (const t of TABS.values()) { t.term.options.fontSize = FONT_SIZE; t.sendResize(); }
+  for (const tab of TABS.values())
+    for (const i of tab.insts) { i.term.options.fontSize = FONT_SIZE; i.sendResize(); }
 }
 
-/* local terminal */
-async function openLocalTerm() {
-  const t = makeTab("PowerShell");
-  t.host = null;
-  t.unsubs = [];
-  t.sendResize = () => {
-    try { t.fit.fit(); } catch (e) {}
-    invoke("pty_resize", { id: t.id, cols: t.term.cols, rows: t.term.rows });
-  };
-  t.close = () => { invoke("pty_kill", { id: t.id }); removeTab(t); };
-  t.unsubs.push(await listen(`pty-out-${t.id}`, ev => t.term.write(new Uint8Array(ev.payload))));
-  t.unsubs.push(await listen(`pty-exit-${t.id}`, () => t.term.write("\r\n\x1b[1;33m— process exited —\x1b[0m\r\n")));
-  await invoke("pty_spawn", { id: t.id, shell: null });
-  t.term.onData(d => invoke("pty_write", { id: t.id, data: d }));
-  new ResizeObserver(() => { if (t.pane.classList.contains("active")) t.sendResize(); }).observe(t.pane);
-  registerTab(t);
-  setTimeout(t.sendResize, 50);
-}
-$("#new-local").onclick = openLocalTerm;
-
-/* ssh terminal */
-async function openSshTerminal(host) {
-  showView("terms");
-  const t = makeTab(host.label);
-  t.host = host;
-  t.dead = false;
-  t.unsubs = [];
-  t.stats = null;
-  t.prev = {};
-  t.cpuHist = [];
-  t.netHist = [];
-  t.sendResize = () => {
-    try { t.fit.fit(); } catch (e) {}
-    if (!t.dead) invoke("ssh_resize", { id: t.id, cols: t.term.cols, rows: t.term.rows });
-  };
-  t.close = () => { invoke("ssh_kill", { id: t.id }); removeTab(t); };
-
-  t.unsubs.push(await listen(`pty-out-${t.id}`, ev => t.term.write(new Uint8Array(ev.payload))));
-  t.unsubs.push(await listen(`pty-exit-${t.id}`, () => {
-    t.dead = true;
-    t.term.write("\r\n\x1b[1;33m— disconnected — press Enter to reconnect —\x1b[0m\r\n");
-    if (activeTab === t.id) updateConn(t);
-  }));
-  t.unsubs.push(await listen(`stats-${t.id}`, ev => {
-    const s = parseStats(ev.payload, t.prev);
-    if (!s) return;
-    t.stats = s;
-    t.cpuHist.push(s.cpu);
-    if (t.cpuHist.length > 60) t.cpuHist.shift();
-    t.netHist.push({ rx: s.rx_rate, tx: s.tx_rate });
-    if (t.netHist.length > 60) t.netHist.shift();
-    if (activeTab === t.id) { renderStats(t); updateConn(t); }
-  }));
-
-  t.term.onData(d => {
-    if (t.dead) {
-      if (d.includes("\r")) {
-        t.dead = false;
-        t.term.write("\x1b[36m… reconnecting …\x1b[0m\r\n");
-        invoke("ssh_spawn", { id: t.id, hostId: host.id }).then(() => setTimeout(t.sendResize, 400))
-          .catch(e => { t.dead = true; t.term.write(`\r\n\x1b[1;31m✗ ${e}\x1b[0m\r\n`); });
-      }
-      return;
-    }
-    invoke("ssh_write", { id: t.id, data: d });
-  });
-
-  new ResizeObserver(() => { if (t.pane.classList.contains("active")) t.sendResize(); }).observe(t.pane);
-  registerTab(t);
-  try {
-    await invoke("ssh_spawn", { id: t.id, hostId: host.id });
-    setTimeout(t.sendResize, 400);
-  } catch (e) {
-    t.dead = true;
-    t.term.write(`\r\n\x1b[1;31m✗ ${e}\x1b[0m\r\n`);
-  }
+/* live SSH sessions across all tabs (for the quit warning) */
+function liveSessionCount() {
+  let n = 0;
+  for (const tab of TABS.values()) for (const i of tab.insts) if (i.source.kind === "ssh" && instAlive(i)) n++;
+  return n;
 }
 
-function updateConn(t) {
-  $("#st-conn").textContent = t.dead ? "disconnected" : "connected";
-  $("#st-conn").classList.toggle("err", t.dead);
-  $(".st-host").classList.toggle("err", t.dead);
+function updateConn(inst) {
+  $("#st-conn").textContent = inst.dead ? "disconnected" : "connected";
+  $("#st-conn").classList.toggle("err", inst.dead);
+  $(".st-host").classList.toggle("err", inst.dead);
 }
 
 /* ---------- stats parsing (port of app/ws.py) ---------- */
@@ -1152,6 +1331,62 @@ $("#tun-add").onclick = async () => {
     $("#tun-name").value = $("#tun-lport").value = $("#tun-dport").value = "";
     loadTunnels();
   } catch (e) { alert(e); }
+};
+
+/* ---------- preferences: cursor, safety ---------- */
+
+$("#pref-cursor-style").value = PREFS.cursorStyle;
+$("#pref-cursor-motion").value = PREFS.cursorMotion;
+$("#pref-warn-tab").checked = PREFS.warnCloseTab;
+$("#pref-warn-quit").checked = PREFS.warnQuit;
+$("#pref-cursor-style").onchange = e => { savePref("cursorStyle", e.target.value); applyCursorPrefs(); };
+$("#pref-cursor-motion").onchange = e => { savePref("cursorMotion", e.target.value); applyCursorPrefs(); };
+$("#pref-warn-tab").onchange = e => savePref("warnCloseTab", e.target.checked);
+$("#pref-warn-quit").onchange = e => savePref("warnQuit", e.target.checked);
+applyCursorPrefs();
+
+/* quit warning: intercept window close while SSH sessions are live */
+(async () => {
+  try {
+    const win = window.__TAURI__.window.getCurrentWindow();
+    await win.onCloseRequested(async ev => {
+      const n = liveSessionCount();
+      if (!PREFS.warnQuit || !n) return;
+      ev.preventDefault();
+      const c = await choose("Quit SSHDeck?",
+        `<b>${n} SSH session${n > 1 ? "s are" : " is"}</b> still connected. Quitting disconnects ${n > 1 ? "them" : "it"}.`,
+        [{ label: "Cancel", value: null }, { label: "Quit", value: "yes", cls: "btn-danger" }]);
+      if (c === "yes") { savePref("warnQuit", PREFS.warnQuit); await win.destroy(); }
+    });
+  } catch (e) { /* window API unavailable (dev in browser) */ }
+})();
+
+/* ---------- factory reset ---------- */
+
+$("#factory-reset").onclick = async () => {
+  const typed = prompt('This deletes ALL SSHDeck data on this machine and restarts the app.\nType RESET to confirm:');
+  if (typed !== "RESET") return;
+  try {
+    localStorage.clear();
+    await invoke("factory_reset");
+  } catch (e) { alert(e); }
+};
+
+/* ---------- import web backup ---------- */
+
+$("#deck-import").onclick = async () => {
+  const path = await window.__TAURI__.dialog.open({
+    multiple: false, title: "Select sshdeck-backup.json",
+    filters: [{ name: "SSHDeck backup", extensions: ["json"] }],
+  });
+  if (!path) return;
+  $("#deck-result").textContent = "importing…";
+  try {
+    const r = await invoke("import_backup", { path });
+    $("#deck-result").textContent =
+      `✓ ${r.hosts} hosts, ${r.folders} folders, ${r.identities} identities, ${r.keys} keys imported (${r.skipped} duplicate hosts skipped)`;
+    loadState();
+  } catch (e) { $("#deck-result").textContent = "✗ " + e; }
 };
 
 /* show/hide password inputs (create/edit forms only — saved secrets never come back) */

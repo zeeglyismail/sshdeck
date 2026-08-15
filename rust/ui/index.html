@@ -34,6 +34,9 @@
       <section id="view-terms" class="view active">
         <div id="tabrow">
           <div id="tabbar"></div>
+          <button id="split-h" class="tabrow-btn" title="Split right — pick a local terminal or any host">◫</button>
+          <button id="split-v" class="tabrow-btn" title="Split down — pick a local terminal or any host">⬓</button>
+          <button id="bcast" class="tabrow-btn" title="MultiExec: typing goes to every split in this tab">⌨ ALL</button>
           <button id="new-local" class="tabrow-btn" title="Open a local PowerShell terminal">+ Local</button>
         </div>
         <div id="panes">
@@ -108,6 +111,33 @@
             <span class="pw-wrap"><input id="key-pass" type="password" placeholder="passphrase (optional)"><button type="button" class="eye" data-for="key-pass" title="show/hide"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span>
             <button id="key-add" class="btn-primary small">Save key</button>
           </div>
+          <h3>Cursor</h3>
+          <div class="row-gap">
+            <label class="inline">Style
+              <select id="pref-cursor-style">
+                <option value="bar">Line (bar)</option>
+                <option value="block">Block</option>
+                <option value="underline">Underline</option>
+              </select></label>
+            <label class="inline">Motion
+              <select id="pref-cursor-motion">
+                <option value="phase">Phase (VS Code expand)</option>
+                <option value="blink">Blink</option>
+                <option value="steady">Steady</option>
+              </select></label>
+          </div>
+
+          <h3>Safety</h3>
+          <label class="chk"><input type="checkbox" id="pref-warn-tab"> Warn before closing a tab or split with a live SSH session</label>
+          <label class="chk"><input type="checkbox" id="pref-warn-quit"> Warn before quitting the app while sessions are connected</label>
+
+          <h3>Import from SSHDeck web (Docker)</h3>
+          <p class="muted">Restore a <code>sshdeck-backup.json</code> exported from the web version: folders (nested), hosts, identities and keys — credentials included.</p>
+          <div class="row-gap">
+            <button id="deck-import" class="btn-primary small">Choose backup file…</button>
+            <span id="deck-result" class="muted"></span>
+          </div>
+
           <h3>Theme</h3>
           <div class="row-gap" id="theme-presets"></div>
           <p class="muted">Or paste a theme JSON (same schema as the web app) and apply:</p>
@@ -116,6 +146,10 @@
             <button id="theme-apply" class="btn-primary small">Apply JSON</button>
             <span id="theme-msg" class="muted"></span>
           </div>
+
+          <h3 class="danger-h">Danger zone</h3>
+          <p class="muted">Factory reset wipes <b>everything</b> — hosts, folders, identities, keys, tunnels, the encryption key and all preferences — and restarts the app fresh.</p>
+          <div><button id="factory-reset" class="btn-danger">Factory reset…</button></div>
         </div>
       </section>
     </main>

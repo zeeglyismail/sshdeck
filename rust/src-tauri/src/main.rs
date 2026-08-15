@@ -4,6 +4,7 @@
 
 mod crypto;
 mod db;
+mod portability;
 mod sftp;
 mod ssh;
 mod tunnels;
@@ -440,7 +441,8 @@ fn main() {
             sftp::sftp_delete, sftp::sftp_download, sftp::sftp_upload,
             sftp::transfer_start, sftp::transfers_clear,
             tunnels::tunnels_list, tunnels::tunnel_save, tunnels::tunnel_delete,
-            tunnels::tunnel_start, tunnels::tunnel_stop
+            tunnels::tunnel_start, tunnels::tunnel_stop,
+            portability::import_backup, portability::factory_reset
         ])
         .run(tauri::generate_context!())
         .expect("error while running SSHDeck");

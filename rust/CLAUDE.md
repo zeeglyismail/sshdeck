@@ -42,25 +42,25 @@ everything that differs. Owner's reaction to M1: "feels super smooth".
 
 ## Feature checklist for the desktop (owner's asks)
 
-- [ ] Local terminal tabs (PowerShell / cmd / WSL picker) — M1
-- [ ] SSH terminals with saved hosts/identities/keys — M2
-- [ ] Monitoring bar + graphs (reuse stats command from `app/ws.py`) — M2
+- [x] Local terminal tabs (PowerShell / cmd / WSL picker) — M1
+- [x] SSH terminals with saved hosts/identities/keys — M2
+- [x] Monitoring bar + graphs (reuse stats command from `app/ws.py`) — M2
 - [x] SFTP dual pane + host↔host transfer — M3 (russh-sftp; native file dialogs
       for upload/download; live progress via `transfers` event)
-- [ ] Tunnels: local→remote, **remote→local**, SOCKS — natively bound, no Docker — M4
-- [ ] Splits + MultiExec (broadcast typing) — removed from web on purpose,
+- [x] Tunnels: local→remote, **remote→local**, SOCKS — natively bound, no Docker — M4
+- [x] Splits + MultiExec (broadcast typing) — removed from web on purpose,
       REQUESTED for desktop — M5. **Each split lets you choose its source:
       a LOCAL terminal (PowerShell/cmd/WSL) or ANY saved host** — owner explicit.
-- [ ] **Cursor style option in Settings: block / bar / underline + blink style
+- [x] **Cursor style option in Settings: block / bar / underline + blink style
       (steady / blink / VS Code expand-pulse)** — M5
-- [ ] **Theme presets (owner explicit): exactly ~5 built-ins, no 10+ gallery.
+- [x] **Theme presets (owner explicit): exactly ~5 built-ins, no 10+ gallery.
       Default preset is named "zeegly" — the current SSHDeck Moba-dark palette.
       Others from well-known terminal schemes (Dracula, Nord, One Dark, Gruvbox).
       JSON import stays (same schema as the web app) so any theme can be pasted.**
-- [ ] Middle-click closes tabs (parity with web) — M1
-- [ ] Close warnings: tab with live session + app quit (toggleable) — M5
-- [ ] Factory reset button (wipe data dir, type-to-confirm, relaunch) — M5
-- [ ] mobaconf + sshdeck-backup.json import (reuse formats from `app/mobaconf.py`
+- [x] Middle-click closes tabs (parity with web) — M1
+- [x] Close warnings: tab with live session + app quit (toggleable) — M5
+- [x] Factory reset button (wipe data dir, type-to-confirm, relaunch) — M5
+- [~] mobaconf + sshdeck-backup.json import (backup JSON ✓, mobaconf pending) (reuse formats from `app/mobaconf.py`
       and `app/routers/portability.py`) — M5
 - [ ] X11 forwarding via user-installed VcXsrv — post-M5, optional
 
@@ -117,8 +117,19 @@ bound on 127.0.0.1; local + socks share the pooled connection, remote opens a
 dedicated connection whose `Client.forwarded` channel receives server-opened
 channels (Handler::server_channel_open_forwarded_tcpip). Local -L verified
 end-to-end against ls01 (SSH banner through 127.0.0.1:49555).
-Next: M5 polish (splits w/ local-or-host picker + MultiExec, cursor style option,
-close warnings, reset, backup import), then release build + installer.
+· M5 ✓ polish: tabs are containers of split instances (`tab.insts`, each
+`{kind:"local"}` or `{kind:"ssh", host}`) — ◫/⬓ open a picker (local terminal
+or any saved host), nestable; ⌨ ALL = MultiExec broadcast per tab with per-split
+opt-out; cursor prefs (bar/block/underline × phase/blink/steady, `PREFS`,
+body[data-cursor-motion]); close warnings for live SSH on tab/split close and app
+quit (`onCloseRequested`, needs core:window:allow-destroy); factory reset
+(`portability::factory_reset` wipes data dir + `app.restart()`); import of the
+web app's `sshdeck-backup.json` v1/v2 incl. nested folder paths.
+Headless test recipe: build a shim page (`_shim_test.html`, stubbed
+`window.__TAURI__`) served on a local port and drive it via the browser tool —
+verified splits/MultiExec/prefs with zero JS errors. Delete the shim afterwards.
+Next: release build + installer (tauri bundle: NSIS/MSI), Linux CI matrix,
+then host-key verification (TOFU) and X11 via VcXsrv (optional).
 
 ## Rules
 
