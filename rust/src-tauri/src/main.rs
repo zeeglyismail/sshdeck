@@ -425,6 +425,7 @@ fn main() {
         .manage(tunnels::Active::default())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("app data dir");
+            portability::apply_pending_reset(&data_dir);
             let database = db::open(data_dir.clone());
             tunnels::ensure_schema(&database.0.lock().unwrap());
             app.manage(database);

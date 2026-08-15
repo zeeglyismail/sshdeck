@@ -152,21 +152,25 @@ pub fn import_backup(db: State<Db>, crypto: State<Crypto>, path: String) -> Resu
     Ok(res)
 }
 
-/// Wipe the data dir (db + key) and relaunch the app.
+/// Factory reset. Windows won't delete a file the process still has open (the
+/// SQLite handle), so we drop a marker and let the NEXT process wipe the data dir
+/// before it opens the DB — see `apply_pending_reset`.
 #[tauri::command]
 pub fn factory_reset(app: AppHandle) -> Result<(), String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    // close the DB handle first so Windows lets us delete the file
-    {
-        let db = app.state::<Db>();
-        let conn = db.0.lock().unwrap();
-        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
-    }
-    for name in ["sshdeck.db", "sshdeck.db-wal", "sshdeck.db-shm", "secret.key"] {
-        let p = dir.join(name);
-        if p.exists() {
-            std::fs::remove_file(&p).map_err(|e| format!("cannot delete {name}: {e}"))?;
-        }
-    }
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("RESET"), b"1").map_err(|e| format!("cannot arm reset: {e}"))?;
     app.restart();
+}
+
+/// Called at startup before the DB is opened: if a RESET marker exists, wipe
+/// every data file (db, wal/shm, encryption key) and the marker itself.
+pub fn apply_pending_reset(dir: &std::path::Path) {
+    let marker = dir.join("RESET");
+    if !marker.exists() {
+        return;
+    }
+    for name in ["sshdeck.db", "sshdeck.db-wal", "sshdeck.db-shm", "secret.key", "RESET"] {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
 }
