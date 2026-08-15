@@ -733,9 +733,19 @@ function renderIdentities() {
   for (const i of STATE.identities) {
     const item = document.createElement("div");
     item.className = "key-item";
-    item.innerHTML = `<span class="kname">👤 ${esc(i.name)}</span><span class="muted">${esc(i.username)}</span>` +
-      `<button class="btn-danger small">Delete</button>`;
-    item.querySelector("button").onclick = async () => {
+    item.innerHTML = `<span class="kname">👤 ${esc(i.name)}</span>` +
+      `<span class="muted">${esc(i.username)} / ••••••</span>` +
+      `<button class="btn-ghost small upd">Change password</button>` +
+      `<button class="btn-danger small del">Delete</button>`;
+    item.querySelector(".upd").onclick = async () => {
+      const pw = prompt(`New password for "${i.name}" (${i.username}):`);
+      if (!pw) return;
+      try {
+        await invoke("identity_save", { id: i.id, name: i.name, username: i.username, password: pw });
+        alert("Updated");
+      } catch (e) { alert(e); }
+    };
+    item.querySelector(".del").onclick = async () => {
       if (!confirm(`Delete identity "${i.name}"?`)) return;
       try { await invoke("identity_delete", { id: i.id }); loadState(); } catch (e) { alert(e); }
     };

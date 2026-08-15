@@ -155,6 +155,7 @@ body.resizing * { transition: none !important; }
 .key-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; }
 .key-item .kname { font-family: var(--mono); }
 .key-item button { margin-left: auto; }
+.key-item button + button { margin-left: 0; }
 .theme-chip { border: 1px solid var(--border); background: var(--bg2); color: var(--fg); border-radius: 6px; padding: 8px 14px; display: flex; align-items: center; gap: 8px; }
 .theme-chip:hover { border-color: var(--accent); }
 .theme-chip.on { border-color: var(--accent); color: var(--accent); }

@@ -25,13 +25,12 @@ pub struct ConnectSpec {
 
 pub struct Client;
 
-#[async_trait::async_trait]
 impl client::Handler for Client {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh::keys::key::PublicKey,
+        _server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
         Ok(true) // LAN tool: trust-on-use, host key pinning is on the roadmap
     }
@@ -64,26 +63,57 @@ async fn connect(spec: &ConnectSpec) -> Result<Handle<Client>, String> {
         .await
         .map_err(|e| format!("connect failed: {e}"))?;
 
-    let authed = if let Some(pem) = &spec.key_pem {
+    let user = spec.username.clone();
+    if let Some(pem) = &spec.key_pem {
         let key = russh::keys::decode_secret_key(pem, spec.key_pass.as_deref())
             .map_err(|e| format!("bad private key: {e}"))?;
-        handle
-            .authenticate_publickey(spec.username.clone(), Arc::new(key))
+        let hash = handle
+            .best_supported_rsa_hash()
             .await
-            .map_err(|e| format!("key auth failed: {e}"))?
-    } else {
-        handle
-            .authenticate_password(
-                spec.username.clone(),
-                spec.password.clone().unwrap_or_default(),
+            .map_err(|e| e.to_string())?
+            .flatten();
+        let r = handle
+            .authenticate_publickey(
+                user.clone(),
+                russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash),
             )
             .await
-            .map_err(|e| format!("auth failed: {e}"))?
-    };
-    if !authed {
-        return Err("authentication rejected".into());
+            .map_err(|e| format!("key auth failed: {e}"))?;
+        if r.success() {
+            return Ok(handle);
+        }
+        return Err("key rejected by server".into());
     }
-    Ok(handle)
+
+    let pw = spec.password.clone().unwrap_or_default();
+    // 1) plain password (servers with PasswordAuthentication yes)
+    let r = handle
+        .authenticate_password(user.clone(), pw.clone())
+        .await
+        .map_err(|e| format!("auth failed: {e}"))?;
+    if r.success() {
+        return Ok(handle);
+    }
+    // 2) keyboard-interactive — Ubuntu default (PAM), what OpenSSH/asyncssh fall back to
+    let mut resp = handle
+        .authenticate_keyboard_interactive_start(user.clone(), None)
+        .await
+        .map_err(|e| format!("auth failed: {e}"))?;
+    for _ in 0..8 {
+        use client::KeyboardInteractiveAuthResponse as K;
+        match resp {
+            K::Success => return Ok(handle),
+            K::Failure { .. } => break,
+            K::InfoRequest { prompts, .. } => {
+                let answers = prompts.iter().map(|_| pw.clone()).collect();
+                resp = handle
+                    .authenticate_keyboard_interactive_respond(answers)
+                    .await
+                    .map_err(|e| format!("auth failed: {e}"))?;
+            }
+        }
+    }
+    Err("authentication rejected (password / keyboard-interactive)".into())
 }
 
 const STATS_CMD: &str = "head -1 /proc/stat; echo @@; \

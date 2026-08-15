@@ -95,8 +95,16 @@ If `cargo tauri` is missing: `cargo install tauri-cli --locked`.
   drag-drop interception swallows all HTML5 `dragstart` events on Windows; without
   it no in-app drag & drop (files between panes, hosts to folders) works.
 - File dialogs need `tauri-plugin-dialog` + `dialog:default` permission.
-- russh 0.46 API: `#[async_trait]` on the Handler impl, `key::PublicKey`,
-  auth methods return `bool`, `Handle` is not Clone (wrap in Arc).
+- **russh is pinned to 0.52** — chosen deliberately: 0.46's keyboard-interactive
+  was broken (hangs), and 0.6x pulls aws-lc-sys (needs CMake/NASM on Windows, fatter
+  exe). 0.52 = ring backend + working kbd-interactive + native async traits.
+- **Auth MUST try password THEN keyboard-interactive.** The owner's Ubuntu fleet
+  advertises only `publickey,keyboard-interactive` (no plain password) — asyncssh
+  falls back silently, russh does not. See `connect()` in ssh.rs. Never remove
+  the fallback: it's why the "authentication rejected" bug happened.
+- russh 0.5x API: no `#[async_trait]`, `russh::keys::PublicKey`, auth returns
+  `AuthResult` (`.success()`), publickey needs `PrivateKeyWithHashAlg`,
+  `Handle` is not Clone (wrap in Arc).
 - Emoji glyphs (👁) ignore CSS `color` → use inline SVG with `currentColor`.
 
 ## Status
