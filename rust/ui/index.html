@@ -9,19 +9,109 @@
 <body>
 <div id="app">
   <header id="topbar">
-    <div class="brand">SSH<span>Deck</span> <span class="badge">desktop · M1</span></div>
+    <div class="brand">SSH<span>Deck</span></div>
+    <nav id="mainnav">
+      <button data-view="terms" class="nav-btn active">Terminals</button>
+      <button data-view="settings" class="nav-btn">Settings</button>
+    </nav>
     <div class="top-right">
-      <button id="new-term" class="btn-primary small">+ Local terminal</button>
+      <button id="new-local" class="btn-ghost small" title="Open a local PowerShell terminal">+ Local</button>
     </div>
   </header>
-  <div id="tabrow"><div id="tabbar"></div></div>
-  <div id="panes">
-    <div id="empty" class="empty">
-      <div class="empty-logo">⌁</div>
-      <p>Milestone 1 — local terminal over ConPTY.<br>Click <b>+ Local terminal</b> to start PowerShell.</p>
+
+  <div id="body">
+    <aside id="sidebar">
+      <div class="side-head"><input id="filter" placeholder="filter sessions…" spellcheck="false"></div>
+      <div id="tree"></div>
+      <div class="side-foot">
+        <button id="add-host" class="btn-primary small">+ Host</button>
+        <button id="add-folder" class="btn-ghost small">+ Folder</button>
+      </div>
+    </aside>
+    <div id="side-resizer"></div>
+
+    <main id="main">
+      <section id="view-terms" class="view active">
+        <div id="tabrow"><div id="tabbar"></div></div>
+        <div id="panes">
+          <div id="empty" class="empty">
+            <div class="empty-logo">⌁</div>
+            <p>Pick a session from the left, or open a local terminal.</p>
+          </div>
+        </div>
+        <footer id="statusbar" class="hidden">
+          <span class="st-host"><span class="dot"></span><b id="st-label"></b><span id="st-addr"></span></span>
+          <span class="st-item">CPU <canvas id="st-cpugraph" width="110" height="17"></canvas><b id="st-cpu">–</b></span>
+          <span class="st-item">RAM <span class="meter"><i id="st-membar"></i></span><b id="st-mem">–</b></span>
+          <span class="st-item">DISK / <span class="meter"><i id="st-diskbar"></i></span><b id="st-disk">–</b></span>
+          <span class="st-item">NET <canvas id="st-netgraph" width="110" height="17"></canvas><b class="up" id="st-tx">↑0</b> <b class="down" id="st-rx">↓0</b></span>
+          <span class="st-item">UPTIME <b id="st-up">–</b></span>
+          <span class="st-item st-users-wrap">USERS <b id="st-users">–</b><div id="who-pop"></div></span>
+          <span class="st-conn" id="st-conn">connected</span>
+        </footer>
+      </section>
+
+      <section id="view-settings" class="view">
+        <div class="page">
+          <h2>Settings</h2>
+          <h3>Identities</h3>
+          <div id="identlist"></div>
+          <div class="row-gap">
+            <input id="ident-name" placeholder="identity name">
+            <input id="ident-user" placeholder="username" spellcheck="false">
+            <input id="ident-pass" type="password" placeholder="password">
+            <button id="ident-add" class="btn-primary small">Save</button>
+          </div>
+          <h3>SSH Keys</h3>
+          <div id="keylist"></div>
+          <input id="key-name" placeholder="key name">
+          <textarea id="key-priv" rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea>
+          <div class="row-gap">
+            <input id="key-pass" type="password" placeholder="passphrase (optional)">
+            <button id="key-add" class="btn-primary small">Save key</button>
+          </div>
+          <h3>Theme</h3>
+          <div class="row-gap" id="theme-presets"></div>
+          <p class="muted">Or paste a theme JSON (same schema as the web app) and apply:</p>
+          <textarea id="theme-json" rows="6" spellcheck="false" placeholder='{"name":"mine","ui":{"accent":"#e2b93d"},"terminal":{"background":"#101014"}}'></textarea>
+          <div class="row-gap">
+            <button id="theme-apply" class="btn-primary small">Apply JSON</button>
+            <span id="theme-msg" class="muted"></span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- host modal -->
+<div id="modal-bg" class="hidden">
+  <div class="modal">
+    <h3 id="hm-title">Add host</h3>
+    <div class="grid2">
+      <label>Label<input id="hm-label"></label>
+      <label>Folder<select id="hm-folder"></select></label>
+      <label>Hostname / IP<input id="hm-host" spellcheck="false"></label>
+      <label>Port<input id="hm-port" type="number" value="22"></label>
+      <label>Username<input id="hm-user" spellcheck="false"></label>
+      <label>Auth<select id="hm-auth">
+        <option value="password">Password</option>
+        <option value="identity">Identity</option>
+        <option value="key">SSH key</option>
+      </select></label>
+      <label id="hm-pw-wrap">Password<input id="hm-pw" type="password"></label>
+      <label id="hm-key-wrap" class="hidden">Key<select id="hm-key"></select></label>
+      <label id="hm-ident-wrap" class="hidden">Identity<select id="hm-ident"></select></label>
+    </div>
+    <div class="modal-actions">
+      <button id="hm-delete" class="btn-danger hidden">Delete</button>
+      <span class="spacer"></span>
+      <button id="hm-cancel" class="btn-ghost">Cancel</button>
+      <button id="hm-save" class="btn-primary">Save</button>
     </div>
   </div>
 </div>
+
 <script src="vendor/xterm.js"></script>
 <script src="vendor/addon-fit.js"></script>
 <script src="app.js"></script>

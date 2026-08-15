@@ -48,9 +48,14 @@ everything that differs. Owner's reaction to M1: "feels super smooth".
 - [ ] SFTP dual pane + host↔host transfer — M3
 - [ ] Tunnels: local→remote, **remote→local**, SOCKS — natively bound, no Docker — M4
 - [ ] Splits + MultiExec (broadcast typing) — removed from web on purpose,
-      REQUESTED for desktop — M5
+      REQUESTED for desktop — M5. **Each split lets you choose its source:
+      a LOCAL terminal (PowerShell/cmd/WSL) or ANY saved host** — owner explicit.
 - [ ] **Cursor style option in Settings: block / bar / underline + blink style
       (steady / blink / VS Code expand-pulse)** — M5
+- [ ] **Theme presets (owner explicit): exactly ~5 built-ins, no 10+ gallery.
+      Default preset is named "zeegly" — the current SSHDeck Moba-dark palette.
+      Others from well-known terminal schemes (Dracula, Nord, One Dark, Gruvbox).
+      JSON import stays (same schema as the web app) so any theme can be pasted.**
 - [ ] Middle-click closes tabs (parity with web) — M1
 - [ ] Close warnings: tab with live session + app quit (toggleable) — M5
 - [ ] Factory reset button (wipe data dir, type-to-confirm, relaunch) — M5
