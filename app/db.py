@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS folders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     name TEXT NOT NULL,
-    UNIQUE(user_id, name)
+    parent_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,6 +69,27 @@ def init():
             _conn.execute("ALTER TABLE hosts ADD COLUMN identity_id INTEGER")
         except sqlite3.OperationalError:
             pass
+        try:
+            _conn.execute("ALTER TABLE folders ADD COLUMN parent_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
+        # old schema had UNIQUE(user_id, name); nested folders may legitimately share
+        # names under different parents, so rebuild the table without that constraint
+        idx = _conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='folders'").fetchone()
+        if idx and "UNIQUE" in (idx[0] or ""):
+            _conn.executescript("""
+                CREATE TABLE folders_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    parent_id INTEGER
+                );
+                INSERT INTO folders_new(id, user_id, name, parent_id)
+                    SELECT id, user_id, name, parent_id FROM folders;
+                DROP TABLE folders;
+                ALTER TABLE folders_new RENAME TO folders;
+            """)
         _conn.commit()
 
 

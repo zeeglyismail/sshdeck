@@ -263,9 +263,11 @@ body.resizing * { transition: none !important; }
 .pw-wrap input { width: 100%; padding-right: 32px; }
 .pw-wrap .eye {
   position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
-  background: none; border: none; color: var(--muted); font-size: 13px; padding: 2px 4px;
+  background: none; border: none; color: var(--muted); padding: 3px 5px; cursor: pointer;
+  display: flex; align-items: center; border-radius: 4px; transition: color .14s, background .14s;
 }
-.pw-wrap .eye:hover, .pw-wrap .eye.on { color: var(--accent); }
+.pw-wrap .eye:hover { color: var(--accent); background: var(--bg2); }
+.pw-wrap .eye.on { color: var(--accent); }
 
 .tdot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; display: inline-block; }
 .tdot.on { background: var(--accent); box-shadow: 0 0 6px var(--accent); }

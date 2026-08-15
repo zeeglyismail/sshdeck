@@ -16,11 +16,7 @@ async def import_mobaconf(file: UploadFile = File(...), user=Depends(auth.curren
     uid = user["id"]
     imported = skipped = 0
     for s in sessions:
-        folder_id = None
-        if s["folder"]:
-            row = db.one("SELECT id FROM folders WHERE user_id=? AND name=?", (uid, s["folder"]))
-            folder_id = row["id"] if row else db.x(
-                "INSERT INTO folders(user_id, name) VALUES(?,?)", (uid, s["folder"]))
+        folder_id = _folder_id_for_path(uid, s["folder"])   # Moba nests with '\', parser gives '/'
         dup = db.one("SELECT id FROM hosts WHERE user_id=? AND hostname=? AND port=? AND username=?",
                      (uid, s["hostname"], s["port"], s["username"]))
         if dup:
@@ -36,18 +32,44 @@ async def import_mobaconf(file: UploadFile = File(...), user=Depends(auth.curren
             "note": "Passwords are not in mobaconf exports in usable form - set them per host."}
 
 
+def _folder_id_for_path(uid: int, path: str | None):
+    """'Parent/Child' → folder id, creating each level as needed. None/'' → root."""
+    if not path:
+        return None
+    parent = None
+    for name in [p for p in path.replace("\\", "/").split("/") if p]:
+        row = db.one("SELECT id FROM folders WHERE user_id=? AND name=? AND parent_id IS ?",
+                     (uid, name, parent))
+        parent = row["id"] if row else db.x(
+            "INSERT INTO folders(user_id, name, parent_id) VALUES(?,?,?)", (uid, name, parent))
+    return parent
+
+
+def _folder_paths(uid: int) -> dict[int, str]:
+    """Map every folder id to its full 'Parent/Child' path."""
+    rows = {f["id"]: f for f in db.q("SELECT id, name, parent_id FROM folders WHERE user_id=?", (uid,))}
+    out = {}
+    for fid, f in rows.items():
+        parts, cur, guard = [], f, 0
+        while cur is not None and guard < 64:
+            parts.append(cur["name"])
+            cur = rows.get(cur["parent_id"])
+            guard += 1
+        out[fid] = "/".join(reversed(parts))
+    return out
+
+
 @router.get("/export/sshdeck")
 def export_sshdeck(user=Depends(auth.current_user)):
     """Full backup: folders, identities, keys, hosts — secrets DECRYPTED.
     Restorable on any SSHDeck instance regardless of its encryption key."""
     uid = user["id"]
-    folders = {f["id"]: f["name"] for f in db.q(
-        "SELECT * FROM folders WHERE user_id=?", (uid,))}
+    folders = _folder_paths(uid)          # id -> "Parent/Child"
     idents = {i["id"]: i for i in db.q(
         "SELECT * FROM identities WHERE user_id=?", (uid,))}
     keys = {k["id"]: k for k in db.q("SELECT * FROM keys WHERE user_id=?", (uid,))}
     data = {
-        "app": "sshdeck", "version": 1,
+        "app": "sshdeck", "version": 2,
         "folders": sorted(folders.values()),
         "identities": [{"name": i["name"], "username": i["username"],
                         "password": crypto.dec(i["password_enc"])} for i in idents.values()],
@@ -77,15 +99,11 @@ async def import_sshdeck(file: UploadFile = File(...), user=Depends(auth.current
     except Exception:
         raise HTTPException(400, "Not a valid sshdeck-backup.json")
 
-    def folder_id_of(name):
-        if not name:
-            return None
-        row = db.one("SELECT id FROM folders WHERE user_id=? AND name=?", (uid, name))
-        return row["id"] if row else db.x(
-            "INSERT INTO folders(user_id, name) VALUES(?,?)", (uid, name))
+    def folder_id_of(path):
+        return _folder_id_for_path(uid, path)
 
-    for name in data.get("folders", []):
-        folder_id_of(name)
+    for path in data.get("folders", []):
+        folder_id_of(path)
 
     ident_ids, key_ids = {}, {}
     for i in data.get("identities", []):
@@ -125,10 +143,10 @@ def export_mobaconf(user=Depends(auth.current_user)):
     groups = []
     root = db.q("SELECT * FROM hosts WHERE user_id=? AND folder_id IS NULL ORDER BY label", (uid,))
     groups.append(("", [dict(r) for r in root]))
-    for f in db.q("SELECT * FROM folders WHERE user_id=? ORDER BY name", (uid,)):
-        hosts = db.q("SELECT * FROM hosts WHERE user_id=? AND folder_id=? ORDER BY label",
-                     (uid, f["id"]))
-        groups.append((f["name"], [dict(r) for r in hosts]))
+    paths = _folder_paths(uid)
+    for fid, path in sorted(paths.items(), key=lambda kv: kv[1].lower()):
+        hosts = db.q("SELECT * FROM hosts WHERE user_id=? AND folder_id=? ORDER BY label", (uid, fid))
+        groups.append((path.replace("/", "\\"), [dict(r) for r in hosts]))   # Moba nests with '\'
     text = mobaconf.export(groups)
     return PlainTextResponse(text, headers={
         "Content-Disposition": 'attachment; filename="sshdeck-export.mobaconf"'})

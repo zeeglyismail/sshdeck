@@ -54,13 +54,35 @@ body.resizing * { transition: none !important; }
 .tree-host .hicon { color: var(--accent); font-size: 11px; }
 .tree-host .hlabel { overflow: hidden; text-overflow: ellipsis; }
 .tree-host .hmeta { margin-left: auto; color: var(--muted); font-size: 11px; }
+.tree-host .edit-btn { visibility: hidden; background: none; border: none; color: var(--muted); padding: 0 2px; }
+.tree-host:hover .edit-btn { visibility: visible; }
+.tree-host .edit-btn:hover { color: var(--accent); }
+.tree-folder.drop { color: var(--accent); background: rgba(76,195,138,.1); }
+#tree.drop { outline: 1px dashed var(--border); outline-offset: -3px; }
 .side-foot { padding: 8px; display: flex; gap: 6px; border-top: 1px solid var(--border); }
 
 #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
 .view.active { display: flex; animation: fadeIn .16s ease; }
 
-#tabrow { display: flex; background: var(--bg2); border-bottom: 1px solid var(--border); flex: none; }
+#tabrow { display: flex; background: var(--bg2); border-bottom: 1px solid var(--border); flex: none; align-items: stretch; }
+.tabrow-btn {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; margin: 4px 6px;
+  color: var(--fg); padding: 0 12px; font-size: 12px; white-space: nowrap; flex: none; cursor: pointer;
+  transition: color .14s, border-color .14s, background .14s;
+}
+.tabrow-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* password inputs with eye toggle */
+.pw-wrap { position: relative; display: flex; flex: 1; min-width: 140px; }
+.pw-wrap input { width: 100%; padding-right: 32px; }
+.pw-wrap .eye {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; color: var(--muted); padding: 3px 5px; cursor: pointer;
+  display: flex; align-items: center; border-radius: 4px; transition: color .14s, background .14s;
+}
+.pw-wrap .eye:hover { color: var(--accent); background: var(--bg2); }
+.pw-wrap .eye.on { color: var(--accent); }
 #tabbar { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
 .tab { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-right: 1px solid var(--border); cursor: pointer; color: var(--muted); white-space: nowrap; font-size: 12px;
   transition: background .14s ease, color .14s ease, opacity .14s ease, transform .18s cubic-bezier(.2,.8,.3,1); animation: slideIn .16s cubic-bezier(.2,.8,.3,1); }

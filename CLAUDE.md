@@ -51,7 +51,11 @@ static/                # index.html, login.html, app.js (~1100 lines), app.css
 ```
 
 - DB schema changes: add `CREATE TABLE IF NOT EXISTS` to `SCHEMA` **and** a guarded
-  `ALTER TABLE` in `db.init()` for existing volumes (see `identity_id` example).
+  `ALTER TABLE` in `db.init()` for existing volumes (see `identity_id` example; the
+  folders table was rebuilt in-place to drop an old UNIQUE(user_id,name) constraint —
+  same pattern for future constraint changes).
+- **Both apps must stay in feature parity** (web `static/` and desktop `rust/ui/`):
+  when adding a sidebar/host/folder feature, do it in both — the owner tests both.
 - Auth flows: host.auth_type ∈ password | key | identity (identity = saved
   username+password template; resolution in `ssh_manager._connect_args`).
 - Stats: one command over the pooled conn reads /proc/stat, meminfo, df, net/dev,
@@ -76,7 +80,11 @@ sidebar · tunnels (local forwards, ports 15000-15020 published) · mobaconf
 import/export · full JSON backup/restore · theme JSON · multi-user · logging ·
 configurable scrollback (default 50k, Settings) · identity picker live-syncs the
 username field in the host modal · middle-click closes terminal tabs ·
-"phase" cursor pulse (CSS animation on .xterm-cursor, xterm blink disabled).
+"phase" cursor pulse (CSS animation on .xterm-cursor, xterm blink disabled) ·
+**nested folders** (folders.parent_id; recursive sidebar; drag host/folder onto
+folder; right-click "New sub-folder"/"Move to root"; delete cascades sub-folders and
+lifts hosts to parent; backup JSON + mobaconf carry paths "Parent/Child" /
+`Parent\Child`) · eye buttons are inline SVG (emoji ignores CSS color).
 
 ## Decisions already made (don't relitigate)
 

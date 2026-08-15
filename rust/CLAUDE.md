@@ -86,6 +86,27 @@ cd ../src-tauri && cargo tauri dev        # or: cargo tauri build
 
 If `cargo tauri` is missing: `cargo install tauri-cli --locked`.
 
+## Gotchas learned the hard way
+
+- **The exe embeds `ui/` at compile time.** Every frontend edit needs
+  `cargo build` + relaunch — there is no hard-refresh. (Kill the running exe first
+  or the linker can't overwrite it.)
+- **`dragDropEnabled: false`** in `tauri.conf.json` is required — Tauri's native
+  drag-drop interception swallows all HTML5 `dragstart` events on Windows; without
+  it no in-app drag & drop (files between panes, hosts to folders) works.
+- File dialogs need `tauri-plugin-dialog` + `dialog:default` permission.
+- russh 0.46 API: `#[async_trait]` on the Handler impl, `key::PublicKey`,
+  auth methods return `bool`, `Handle` is not Clone (wrap in Arc).
+- Emoji glyphs (👁) ignore CSS `color` → use inline SVG with `currentColor`.
+
+## Status
+
+M1 ✓ shell/local PTY · M2 ✓ SSH/hosts/monitoring/themes · M3 ✓ SFTP dual pane,
+host↔host transfer, upload/download via native dialogs, nested folders, full
+sidebar parity with the web app (edit ✎, duplicate, rename, drag to folder/root).
+Next: M4 tunnels (local + remote + SOCKS), then M5 polish (splits w/ local-or-host
+picker + MultiExec, cursor style option, close warnings, reset, backup import).
+
 ## Rules
 
 - Never break the web app while working here; shared repo, separate directory.

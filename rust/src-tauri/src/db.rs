@@ -8,7 +8,8 @@ pub struct Db(pub Mutex<Connection>);
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS folders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE
+    name TEXT NOT NULL,
+    parent_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS identities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,6 +41,25 @@ pub fn open(data_dir: PathBuf) -> Db {
     std::fs::create_dir_all(&data_dir).expect("create data dir");
     let conn = Connection::open(data_dir.join("sshdeck.db")).expect("open db");
     conn.execute_batch(SCHEMA).expect("apply schema");
+    // migrations for DBs created before nested folders
+    let _ = conn.execute("ALTER TABLE folders ADD COLUMN parent_id INTEGER", []);
+    let has_unique: bool = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='folders'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .map(|s| s.contains("UNIQUE"))
+        .unwrap_or(false);
+    if has_unique {
+        conn.execute_batch(
+            "CREATE TABLE folders_new (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, parent_id INTEGER);
+             INSERT INTO folders_new(id, name, parent_id) SELECT id, name, parent_id FROM folders;
+             DROP TABLE folders;
+             ALTER TABLE folders_new RENAME TO folders;",
+        )
+        .expect("migrate folders");
+    }
     Db(Mutex::new(conn))
 }
 
@@ -47,6 +67,7 @@ pub fn open(data_dir: PathBuf) -> Db {
 pub struct Folder {
     pub id: i64,
     pub name: String,
+    pub parent_id: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -87,9 +108,9 @@ pub struct AppState {
 pub fn read_state(db: &Db) -> AppState {
     let conn = db.0.lock().unwrap();
     let folders = conn
-        .prepare("SELECT id, name FROM folders ORDER BY name")
+        .prepare("SELECT id, name, parent_id FROM folders ORDER BY name")
         .unwrap()
-        .query_map([], |r| Ok(Folder { id: r.get(0)?, name: r.get(1)? }))
+        .query_map([], |r| Ok(Folder { id: r.get(0)?, name: r.get(1)?, parent_id: r.get(2)? }))
         .unwrap()
         .filter_map(Result::ok)
         .collect();

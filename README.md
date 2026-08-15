@@ -22,8 +22,8 @@
 - Uptime, and logged-in users with per-user session counts (`ismail×2 devops`) — hover for the full `who` detail
 
 **Sessions**
-- Unlimited saved hosts, organized in folders, with instant filter and natural sorting (`base, 1, 2, … 10` — never `1, 10, 2`)
-- Drag & drop hosts between folders; drag tabs to reorder (animated live preview); right-click context menus with host duplicate
+- Unlimited saved hosts, organized in **nested folders** (any depth), with instant filter and natural sorting (`base, 1, 2, … 10` — never `1, 10, 2`)
+- Drag & drop hosts and folders into folders; drag tabs to reorder (animated live preview); right-click context menus with host duplicate and sub-folder creation
 - **Identities**: save a username+password pair once, pin it to any number of hosts; rotate the password in one place
 - SSH key auth — private keys stored encrypted, never sent to the browser
 - Resizable sidebar, searchable host picker in the file manager

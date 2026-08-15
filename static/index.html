@@ -109,7 +109,7 @@
           <div class="ident-form">
             <input id="ident-name" placeholder="identity name (e.g. devops @ prod)">
             <input id="ident-user" placeholder="username" spellcheck="false">
-            <span class="pw-wrap"><input id="ident-pass" type="password" placeholder="password"><button type="button" class="eye" data-for="ident-pass" title="show/hide">👁</button></span>
+            <span class="pw-wrap"><input id="ident-pass" type="password" placeholder="password"><button type="button" class="eye" data-for="ident-pass" title="show/hide"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span>
             <button id="ident-add" class="btn-primary">Save identity</button>
           </div>
           <h3>SSH Keys</h3>
@@ -118,7 +118,7 @@
           <h3>Add key</h3>
           <input id="key-name" placeholder="key name (e.g. id_ed25519 devops)">
           <textarea id="key-priv" rows="8" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea>
-          <span class="pw-wrap"><input id="key-pass" type="password" placeholder="passphrase (optional)"><button type="button" class="eye" data-for="key-pass" title="show/hide">👁</button></span>
+          <span class="pw-wrap"><input id="key-pass" type="password" placeholder="passphrase (optional)"><button type="button" class="eye" data-for="key-pass" title="show/hide"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span>
           <button id="key-add" class="btn-primary">Save key</button>
         </div>
       </section>
@@ -182,7 +182,7 @@
       <label>Port<input id="hm-port" type="number" value="22"></label>
       <label>Username<input id="hm-user" placeholder="devops" spellcheck="false"></label>
       <label>Auth<select id="hm-auth"><option value="password">Password</option><option value="identity">Identity</option><option value="key">SSH key</option></select></label>
-      <label id="hm-pw-wrap">Password<span class="pw-wrap"><input id="hm-pw" type="password" placeholder=""><button type="button" class="eye" data-for="hm-pw" title="show/hide">👁</button></span></label>
+      <label id="hm-pw-wrap">Password<span class="pw-wrap"><input id="hm-pw" type="password" placeholder=""><button type="button" class="eye" data-for="hm-pw" title="show/hide"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span></label>
       <label id="hm-key-wrap" class="hidden">Key<select id="hm-key"></select></label>
       <label id="hm-ident-wrap" class="hidden">Identity<select id="hm-ident"></select></label>
     </div>

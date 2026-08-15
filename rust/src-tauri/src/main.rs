@@ -83,23 +83,92 @@ fn state_get(db: State<Db>) -> db::AppState {
 }
 
 #[tauri::command]
-fn folder_save(db: State<Db>, name: String) -> Result<i64, String> {
+fn folder_save(db: State<Db>, name: String, parent_id: Option<i64>) -> Result<i64, String> {
     let conn = db.0.lock().unwrap();
-    conn.execute("INSERT OR IGNORE INTO folders(name) VALUES(?1)", [&name])
+    // same name under the same parent → reuse
+    if let Ok(id) = conn.query_row(
+        "SELECT id FROM folders WHERE name=?1 AND parent_id IS ?2",
+        rusqlite::params![name, parent_id],
+        |r| r.get::<_, i64>(0),
+    ) {
+        return Ok(id);
+    }
+    conn.execute("INSERT INTO folders(name, parent_id) VALUES(?1, ?2)", rusqlite::params![name, parent_id])
         .map_err(|e| e.to_string())?;
-    let id = conn
-        .query_row("SELECT id FROM folders WHERE name=?1", [&name], |r| r.get(0))
+    Ok(conn.last_insert_rowid())
+}
+
+/// every folder id at or below `root`
+fn folder_subtree(conn: &rusqlite::Connection, root: i64) -> Vec<i64> {
+    let mut out = vec![root];
+    let mut stack = vec![root];
+    while let Some(cur) = stack.pop() {
+        let mut st = conn.prepare("SELECT id FROM folders WHERE parent_id=?1").unwrap();
+        let kids: Vec<i64> = st.query_map([cur], |r| r.get(0)).unwrap().filter_map(Result::ok).collect();
+        for k in kids {
+            if !out.contains(&k) {
+                out.push(k);
+                stack.push(k);
+            }
+        }
+    }
+    out
+}
+
+#[tauri::command]
+fn folder_move(db: State<Db>, id: i64, parent_id: Option<i64>) -> Result<(), String> {
+    let conn = db.0.lock().unwrap();
+    if let Some(p) = parent_id {
+        if folder_subtree(&conn, id).contains(&p) {
+            return Err("Cannot move a folder into itself".into());
+        }
+    }
+    conn.execute("UPDATE folders SET parent_id=?1 WHERE id=?2", rusqlite::params![parent_id, id])
         .map_err(|e| e.to_string())?;
-    Ok(id)
+    Ok(())
+}
+
+#[tauri::command]
+fn folder_rename(db: State<Db>, id: i64, name: String) -> Result<(), String> {
+    db.0.lock().unwrap()
+        .execute("UPDATE folders SET name=?1 WHERE id=?2", rusqlite::params![name, id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn host_move(db: State<Db>, id: i64, folder_id: Option<i64>) -> Result<(), String> {
+    db.0.lock().unwrap()
+        .execute("UPDATE hosts SET folder_id=?1 WHERE id=?2", rusqlite::params![folder_id, id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn host_duplicate(db: State<Db>, id: i64) -> Result<i64, String> {
+    let conn = db.0.lock().unwrap();
+    conn.execute(
+        "INSERT INTO hosts(folder_id, label, hostname, port, username, auth_type, password_enc, key_id, identity_id) \
+         SELECT folder_id, label || ' (copy)', hostname, port, username, auth_type, password_enc, key_id, identity_id \
+         FROM hosts WHERE id=?1",
+        [id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(conn.last_insert_rowid())
 }
 
 #[tauri::command]
 fn folder_delete(db: State<Db>, id: i64) -> Result<(), String> {
+    // delete folder + sub-folders; hosts inside move up to the deleted folder's parent
     let conn = db.0.lock().unwrap();
-    conn.execute("UPDATE hosts SET folder_id=NULL WHERE folder_id=?1", [id])
-        .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM folders WHERE id=?1", [id])
-        .map_err(|e| e.to_string())?;
+    let parent: Option<i64> = conn
+        .query_row("SELECT parent_id FROM folders WHERE id=?1", [id], |r| r.get(0))
+        .unwrap_or(None);
+    for fid in folder_subtree(&conn, id) {
+        conn.execute("UPDATE hosts SET folder_id=?1 WHERE folder_id=?2", rusqlite::params![parent, fid])
+            .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM folders WHERE id=?1", [fid]).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -336,7 +405,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             pty_spawn, pty_write, pty_resize, pty_kill,
-            state_get, folder_save, folder_delete, host_save, host_delete,
+            state_get, folder_save, folder_rename, folder_move, folder_delete,
+            host_save, host_delete, host_move, host_duplicate,
             identity_save, identity_delete, key_save, key_delete,
             ssh_spawn, ssh_write, ssh_resize, ssh_kill,
             sftp::sftp_list, sftp::sftp_mkdir, sftp::sftp_rename, sftp::sftp_chmod,

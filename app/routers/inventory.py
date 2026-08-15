@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api", tags=["inventory"])
 def state(user=Depends(auth.current_user)):
     uid = user["id"]
     folders = [dict(r) for r in db.q(
-        "SELECT id, name FROM folders WHERE user_id=? ORDER BY name", (uid,))]
+        "SELECT id, name, parent_id FROM folders WHERE user_id=? ORDER BY name", (uid,))]
     hosts = [dict(r) for r in db.q(
         "SELECT id, folder_id, label, hostname, port, username, auth_type, key_id, identity_id, "
         "(password_enc IS NOT NULL) AS has_password "
@@ -27,6 +27,7 @@ def state(user=Depends(auth.current_user)):
 
 class FolderIn(BaseModel):
     name: str
+    parent_id: int | None = None
 
 
 @router.post("/folders")
@@ -34,10 +35,12 @@ def create_folder(body: FolderIn, user=Depends(auth.current_user)):
     name = body.name.strip()
     if not name:
         raise HTTPException(400, "Name required")
-    existing = db.one("SELECT id FROM folders WHERE user_id=? AND name=?", (user["id"], name))
+    existing = db.one("SELECT id FROM folders WHERE user_id=? AND name=? AND parent_id IS ?",
+                      (user["id"], name, body.parent_id))
     if existing:
         return {"id": existing["id"]}
-    return {"id": db.x("INSERT INTO folders(user_id, name) VALUES(?,?)", (user["id"], name))}
+    return {"id": db.x("INSERT INTO folders(user_id, name, parent_id) VALUES(?,?,?)",
+                       (user["id"], name, body.parent_id))}
 
 
 @router.put("/folders/{folder_id}")
@@ -49,10 +52,40 @@ def rename_folder(folder_id: int, body: FolderIn, user=Depends(auth.current_user
     return {"ok": True}
 
 
+def _descendants(uid: int, folder_id: int) -> set[int]:
+    """All folder ids under folder_id (inclusive)."""
+    seen, stack = {folder_id}, [folder_id]
+    while stack:
+        cur = stack.pop()
+        for r in db.q("SELECT id FROM folders WHERE user_id=? AND parent_id=?", (uid, cur)):
+            if r["id"] not in seen:
+                seen.add(r["id"])
+                stack.append(r["id"])
+    return seen
+
+
+class FolderMoveIn(BaseModel):
+    parent_id: int | None = None
+
+
+@router.post("/folders/{folder_id}/move")
+def move_folder(folder_id: int, body: FolderMoveIn, user=Depends(auth.current_user)):
+    uid = user["id"]
+    if body.parent_id is not None and body.parent_id in _descendants(uid, folder_id):
+        raise HTTPException(400, "Cannot move a folder into itself")
+    db.x("UPDATE folders SET parent_id=? WHERE id=? AND user_id=?", (body.parent_id, folder_id, uid))
+    return {"ok": True}
+
+
 @router.delete("/folders/{folder_id}")
 def delete_folder(folder_id: int, user=Depends(auth.current_user)):
-    db.x("UPDATE hosts SET folder_id=NULL WHERE folder_id=? AND user_id=?", (folder_id, user["id"]))
-    db.x("DELETE FROM folders WHERE id=? AND user_id=?", (folder_id, user["id"]))
+    """Delete a folder and its sub-folders; hosts inside move to the parent folder."""
+    uid = user["id"]
+    row = db.one("SELECT parent_id FROM folders WHERE id=? AND user_id=?", (folder_id, uid))
+    parent = row["parent_id"] if row else None
+    for fid in _descendants(uid, folder_id):
+        db.x("UPDATE hosts SET folder_id=? WHERE folder_id=? AND user_id=?", (parent, fid, uid))
+        db.x("DELETE FROM folders WHERE id=? AND user_id=?", (fid, uid))
     return {"ok": True}
 
 

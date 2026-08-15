@@ -10,6 +10,7 @@ const TABS = new Map();
 let seq = 0;
 let activeTab = null;
 let FONT_SIZE = parseInt(localStorage.getItem("deck.fontsize")) || 13;
+const HOST_DND = "application/x-deck-host";
 
 /* ---------- themes ---------- */
 
@@ -166,58 +167,166 @@ async function loadState() {
 
 const closedFolders = new Set(JSON.parse(localStorage.getItem("deck.closed") || "[]"));
 
+const FOLDER_DND = "application/x-deck-folder";
+
+async function moveHost(hostId, folderId) {
+  await invoke("host_move", { id: hostId, folderId });
+  loadState();
+}
+async function moveFolder(folderId, parentId) {
+  try { await invoke("folder_move", { id: folderId, parentId }); loadState(); }
+  catch (e) { alert(e); }
+}
+function folderHasMatch(id, match) {
+  if (STATE.hosts.some(h => h.folder_id === id && match(h))) return true;
+  return STATE.folders.some(f => f.parent_id === id && folderHasMatch(f.id, match));
+}
+/* <option>s for every folder, depth-first, indented to show nesting */
+function folderOptions(selectedId) {
+  const out = [];
+  const walk = (parentId, depth) => {
+    for (const f of STATE.folders.filter(x => x.parent_id === parentId)) {
+      out.push(`<option value="${f.id}"${f.id === selectedId ? " selected" : ""}>` +
+        `${"&nbsp;&nbsp;".repeat(depth)}${depth ? "↳ " : ""}${esc(f.name)}</option>`);
+      walk(f.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return out.join("");
+}
+
 function renderTree() {
   const filter = $("#filter").value.trim().toLowerCase();
   const tree = $("#tree");
   tree.innerHTML = "";
   const match = h => !filter || h.label.toLowerCase().includes(filter) ||
     h.hostname.toLowerCase().includes(filter) || h.username.toLowerCase().includes(filter);
-  const groups = [{ id: null, name: "" }, ...STATE.folders];
-  for (const f of groups) {
-    const hosts = STATE.hosts.filter(h => h.folder_id === f.id && match(h));
-    if (f.id !== null && !hosts.length && filter) continue;
-    if (f.id !== null) {
-      const fe = document.createElement("div");
-      const closed = closedFolders.has(f.id) && !filter;
-      fe.className = "tree-folder" + (closed ? " closed" : "");
-      fe.innerHTML = `<span class="arrow">▼</span><span>${esc(f.name)}</span>`;
-      fe.onclick = () => {
-        closedFolders.has(f.id) ? closedFolders.delete(f.id) : closedFolders.add(f.id);
-        localStorage.setItem("deck.closed", JSON.stringify([...closedFolders]));
-        renderTree();
-      };
-      fe.oncontextmenu = e => ctxMenu(e, [
-        { label: "Delete", danger: true, fn: async () => {
-            if (confirm(`Delete folder "${f.name}"? (hosts move to root)`)) {
-              await invoke("folder_delete", { id: f.id });
-              loadState();
-            }
-          } },
-      ]);
-      tree.appendChild(fe);
-      if (closed) continue;
-    }
-    for (const h of hosts) {
-      const ident = h.identity_id ? STATE.identities.find(i => i.id === h.identity_id) : null;
-      const shownUser = h.auth_type === "identity" && ident ? ident.username : h.username;
-      const he = document.createElement("div");
-      he.className = "tree-host";
-      he.title = `${shownUser}@${h.hostname}:${h.port}`;
-      he.innerHTML = `<span class="hicon">●</span><span class="hlabel">${esc(h.label)}</span>` +
-        `<span class="hmeta">${esc(shownUser)}</span>`;
-      he.onclick = () => openSshTerminal(h);
-      he.oncontextmenu = e => ctxMenu(e, [
-        { label: "Connect", fn: () => openSshTerminal(h) },
-        { label: "Edit", fn: () => openHostModal(h) },
-        { label: "Delete", danger: true, fn: async () => {
-            if (!confirm(`Delete host "${h.label}"?`)) return;
-            await invoke("host_delete", { id: h.id });
+
+  const hostRow = (h, depth) => {
+    const ident = h.identity_id ? STATE.identities.find(i => i.id === h.identity_id) : null;
+    const shownUser = h.auth_type === "identity" && ident ? ident.username : h.username;
+    const he = document.createElement("div");
+    he.className = "tree-host";
+    he.style.paddingLeft = (22 + depth * 14) + "px";
+    he.title = `${shownUser}@${h.hostname}:${h.port}`;
+    he.innerHTML = `<span class="hicon">●</span><span class="hlabel">${esc(h.label)}</span>` +
+      `<span class="hmeta">${esc(shownUser)}</span>` +
+      `<button class="edit-btn" title="Edit">✎</button>`;
+    he.onclick = e => {
+      if (e.target.classList.contains("edit-btn")) { openHostModal(h); return; }
+      openSshTerminal(h);
+    };
+    he.oncontextmenu = e => ctxMenu(e, [
+      { label: "Connect", fn: () => openSshTerminal(h) },
+      { label: "Edit", fn: () => openHostModal(h) },
+      { label: "Duplicate", fn: async () => {
+          const newId = await invoke("host_duplicate", { id: h.id });
+          await loadState();
+          const copy = STATE.hosts.find(x => x.id === newId);
+          if (copy) openHostModal(copy);
+        } },
+      { label: "Delete", danger: true, fn: async () => {
+          if (!confirm(`Delete host "${h.label}"?`)) return;
+          await invoke("host_delete", { id: h.id });
+          loadState();
+        } },
+    ]);
+    he.draggable = true;
+    he.addEventListener("dragstart", ev => {
+      ev.dataTransfer.setData(HOST_DND, String(h.id));
+      ev.dataTransfer.effectAllowed = "move";
+    });
+    return he;
+  };
+
+  const folderRow = (f, depth) => {
+    const fe = document.createElement("div");
+    const closed = closedFolders.has(f.id) && !filter;
+    fe.className = "tree-folder" + (closed ? " closed" : "");
+    fe.style.paddingLeft = (10 + depth * 14) + "px";
+    fe.innerHTML = `<span class="arrow">▼</span><span>${esc(f.name)}</span>`;
+    fe.oncontextmenu = e => ctxMenu(e, [
+      { label: "New sub-folder", fn: async () => {
+          const name = prompt(`New folder inside "${f.name}":`);
+          if (name && name.trim()) {
+            await invoke("folder_save", { name: name.trim(), parentId: f.id });
+            closedFolders.delete(f.id);
             loadState();
-          } },
-      ]);
-      tree.appendChild(he);
+          }
+        } },
+      { label: "Rename", fn: async () => {
+          const name = prompt("Folder name:", f.name);
+          if (name && name.trim() && name !== f.name) {
+            await invoke("folder_rename", { id: f.id, name: name.trim() });
+            loadState();
+          }
+        } },
+      { label: "Move to root", fn: () => moveFolder(f.id, null) },
+      { label: "Delete", danger: true, fn: async () => {
+          if (confirm(`Delete folder "${f.name}" and its sub-folders? (hosts move up one level)`)) {
+            await invoke("folder_delete", { id: f.id });
+            loadState();
+          }
+        } },
+    ]);
+    fe.addEventListener("dragover", ev => {
+      const t = ev.dataTransfer.types;
+      if (t.includes(HOST_DND) || t.includes(FOLDER_DND)) { ev.preventDefault(); fe.classList.add("drop"); }
+    });
+    fe.addEventListener("dragleave", () => fe.classList.remove("drop"));
+    fe.addEventListener("drop", ev => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      fe.classList.remove("drop");
+      const hid = parseInt(ev.dataTransfer.getData(HOST_DND));
+      const fid = parseInt(ev.dataTransfer.getData(FOLDER_DND));
+      if (hid) moveHost(hid, f.id);
+      else if (fid && fid !== f.id) moveFolder(fid, f.id);
+    });
+    fe.draggable = true;
+    fe.addEventListener("dragstart", ev => {
+      ev.dataTransfer.setData(FOLDER_DND, String(f.id));
+      ev.dataTransfer.effectAllowed = "move";
+      ev.stopPropagation();
+    });
+    fe.onclick = () => {
+      closedFolders.has(f.id) ? closedFolders.delete(f.id) : closedFolders.add(f.id);
+      localStorage.setItem("deck.closed", JSON.stringify([...closedFolders]));
+      renderTree();
+    };
+    return fe;
+  };
+
+  // inside a folder: its hosts first, then its sub-folders (each recursing)
+  const renderInside = (parentId, depth) => {
+    for (const h of STATE.hosts.filter(h => h.folder_id === parentId && match(h)))
+      tree.appendChild(hostRow(h, depth));
+    for (const f of STATE.folders.filter(x => x.parent_id === parentId)) {
+      if (filter && !folderHasMatch(f.id, match)) continue;
+      tree.appendChild(folderRow(f, depth));
+      if (closedFolders.has(f.id) && !filter) continue;
+      renderInside(f.id, depth + 1);
     }
-  }
+  };
+  renderInside(null, 0);
+}
+
+// drop on empty tree space → move host / folder to root
+{
+  const treeEl = $("#tree");
+  treeEl.addEventListener("dragover", ev => {
+    const t = ev.dataTransfer.types;
+    if (t.includes(HOST_DND) || t.includes(FOLDER_DND)) { ev.preventDefault(); treeEl.classList.add("drop"); }
+  });
+  treeEl.addEventListener("dragleave", ev => { if (!treeEl.contains(ev.relatedTarget)) treeEl.classList.remove("drop"); });
+  treeEl.addEventListener("drop", ev => {
+    ev.preventDefault();
+    treeEl.classList.remove("drop");
+    const hid = parseInt(ev.dataTransfer.getData(HOST_DND));
+    const fid = parseInt(ev.dataTransfer.getData(FOLDER_DND));
+    if (hid) moveHost(hid, null);
+    else if (fid) moveFolder(fid, null);
+  });
 }
 
 $("#filter").addEventListener("input", renderTree);
@@ -533,8 +642,7 @@ function openHostModal(host) {
   editingHost = host || null;
   $("#hm-title").textContent = host ? "Edit host" : "Add host";
   $("#hm-delete").classList.toggle("hidden", !host);
-  $("#hm-folder").innerHTML = '<option value="">(no folder)</option>' +
-    STATE.folders.map(f => `<option value="${f.id}">${esc(f.name)}</option>`).join("");
+  $("#hm-folder").innerHTML = '<option value="">(no folder)</option>' + folderOptions();
   $("#hm-key").innerHTML = STATE.keys.map(k => `<option value="${k.id}">${esc(k.name)}</option>`).join("") ||
     '<option value="">(no keys)</option>';
   $("#hm-ident").innerHTML = STATE.identities.map(i => `<option value="${i.id}">${esc(i.name)} (${esc(i.username)})</option>`).join("") ||
@@ -613,8 +721,8 @@ $("#hm-delete").onclick = async () => {
 
 $("#add-host").onclick = () => openHostModal(null);
 $("#add-folder").onclick = async () => {
-  const name = prompt("Folder name:");
-  if (name && name.trim()) { await invoke("folder_save", { name: name.trim() }); loadState(); }
+  const name = prompt("Folder name (root level — right-click a folder to add a sub-folder):");
+  if (name && name.trim()) { await invoke("folder_save", { name: name.trim(), parentId: null }); loadState(); }
 };
 
 /* ---------- identities & keys ---------- */
@@ -909,6 +1017,16 @@ listen("transfers", ev => {
   if (anyDone) PANES.forEach(P => { if (P.hostId && P.load) P.load(); });
 });
 $("#tr-clear").onclick = () => invoke("transfers_clear");
+
+/* show/hide password inputs (create/edit forms only — saved secrets never come back) */
+document.addEventListener("click", e => {
+  const btn = e.target.closest(".eye");
+  if (!btn) return;
+  const input = document.getElementById(btn.dataset.for);
+  if (!input) return;
+  input.type = input.type === "password" ? "text" : "password";
+  btn.classList.toggle("on", input.type === "text");
+});
 
 /* ---------- boot ---------- */
 

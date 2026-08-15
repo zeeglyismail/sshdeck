@@ -15,9 +15,7 @@
       <button data-view="files" class="nav-btn">Files</button>
       <button data-view="settings" class="nav-btn">Settings</button>
     </nav>
-    <div class="top-right">
-      <button id="new-local" class="btn-ghost small" title="Open a local PowerShell terminal">+ Local</button>
-    </div>
+    <div class="top-right"></div>
   </header>
 
   <div id="body">
@@ -33,7 +31,10 @@
 
     <main id="main">
       <section id="view-terms" class="view active">
-        <div id="tabrow"><div id="tabbar"></div></div>
+        <div id="tabrow">
+          <div id="tabbar"></div>
+          <button id="new-local" class="tabrow-btn" title="Open a local PowerShell terminal">+ Local</button>
+        </div>
         <div id="panes">
           <div id="empty" class="empty">
             <div class="empty-logo">⌁</div>
@@ -71,7 +72,7 @@
           <div class="row-gap">
             <input id="ident-name" placeholder="identity name">
             <input id="ident-user" placeholder="username" spellcheck="false">
-            <input id="ident-pass" type="password" placeholder="password">
+            <span class="pw-wrap"><input id="ident-pass" type="password" placeholder="password"><button type="button" class="eye" data-for="ident-pass" title="show/hide"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span>
             <button id="ident-add" class="btn-primary small">Save</button>
           </div>
           <h3>SSH Keys</h3>
@@ -79,7 +80,7 @@
           <input id="key-name" placeholder="key name">
           <textarea id="key-priv" rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false"></textarea>
           <div class="row-gap">
-            <input id="key-pass" type="password" placeholder="passphrase (optional)">
+            <span class="pw-wrap"><input id="key-pass" type="password" placeholder="passphrase (optional)"><button type="button" class="eye" data-for="key-pass" title="show/hide"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span>
             <button id="key-add" class="btn-primary small">Save key</button>
           </div>
           <h3>Theme</h3>
@@ -111,7 +112,7 @@
         <option value="identity">Identity</option>
         <option value="key">SSH key</option>
       </select></label>
-      <label id="hm-pw-wrap">Password<input id="hm-pw" type="password"></label>
+      <label id="hm-pw-wrap">Password<span class="pw-wrap"><input id="hm-pw" type="password"><button type="button" class="eye" data-for="hm-pw" title="show/hide"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span></label>
       <label id="hm-key-wrap" class="hidden">Key<select id="hm-key"></select></label>
       <label id="hm-ident-wrap" class="hidden">Identity<select id="hm-ident"></select></label>
     </div>
