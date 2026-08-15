@@ -77,6 +77,7 @@ function applyTheme(theme, save = true) {
   for (const [k, v] of Object.entries(ACTIVE_THEME.ui))
     document.documentElement.style.setProperty("--" + k, v);
   GRAPH = { cpu: ACTIVE_THEME.ui.accent, tx: ACTIVE_THEME.ui.accent2 };
+  document.documentElement.style.setProperty("--cursor", ACTIVE_THEME.terminal.cursor || "#ffffff");
   for (const t of TABS.values()) t.term.options.theme = ACTIVE_THEME.terminal;
   renderThemeChips();
   if (save) localStorage.setItem("deck.theme", JSON.stringify(theme));

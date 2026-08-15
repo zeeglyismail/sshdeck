@@ -393,6 +393,7 @@ function applyTheme(theme, save = true) {
     document.documentElement.style.setProperty("--" + k, v);
   ACTIVE_TERM_THEME = { ...TERM_THEME, ...(theme.terminal || {}) };
   GRAPH_COLORS = { cpu: ui.accent, rx: ui.accent, tx: ui.accent2 };
+  document.documentElement.style.setProperty("--cursor", ACTIVE_TERM_THEME.cursor || "#ffffff");
   for (const tab of TABS.values()) for (const t of (tab.terms || [])) t.term.options.theme = ACTIVE_TERM_THEME;
   if (save) localStorage.setItem("sshdeck.theme", JSON.stringify(theme));
 }

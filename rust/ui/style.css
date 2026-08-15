@@ -189,8 +189,14 @@ body.resizing * { transition: none !important; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes popIn { from { opacity: 0; transform: scale(.97) translateY(2px); } to { opacity: 1; transform: none; } }
 @keyframes slideIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* VS Code expand cursor on a pseudo-element bar so the glyph under the cursor stays still */
 @keyframes cursor-expand { 0%, 20% { transform: scaleY(1); } 80%, 100% { transform: scaleY(0); } }
-.xterm.focus .xterm-cursor { animation: cursor-expand 560ms ease-in-out 0s infinite alternate; transform-origin: center; }
+.xterm.focus .xterm-cursor.xterm-cursor-bar { box-shadow: none !important; position: relative; }
+.xterm.focus .xterm-cursor.xterm-cursor-bar::after {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  background: var(--cursor, #ffffff);
+  animation: cursor-expand 560ms ease-in-out 0s infinite alternate; transform-origin: center; pointer-events: none;
+}
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #3c3c40; border-radius: 5px; }
