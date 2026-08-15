@@ -112,6 +112,15 @@ lifts hosts to parent; backup JSON + mobaconf carry paths "Parent/Child" /
 3. Transfer acceleration (exec `cat` streaming).
 4. SSH host key verification (currently `known_hosts=None` — LAN tool), TOTP login.
 
+## Testing hygiene — NON-NEGOTIABLE
+
+Every test artifact must be removed **in the same step it was used**, never "later":
+containers (`docker rm -f`), images (`docker rmi`), pulled helper images (alpine,
+openssh-server), local HTTP servers (kill the PID), shim files, probe crates in
+temp. The owner should never have to ask. Before ending any turn that ran tests,
+verify with `docker ps -a`, `docker images`, `netstat` that nothing is left.
+Never touch the owner's own `sshdeck` container / `sshdeck-sshdeck` image on 8022.
+
 ## How to verify changes
 
 - Syntax: `python -m py_compile app/**/*.py`, `node --check static/app.js`.
