@@ -364,6 +364,11 @@ function openTerminal(host) {
     if (e.target.classList.contains("x")) { closeTab(id); return; }
     activateTab(id);
   };
+  // middle-click closes the tab, browser-style
+  tabEl.addEventListener("mousedown", e => { if (e.button === 1) e.preventDefault(); });
+  tabEl.addEventListener("auxclick", e => {
+    if (e.button === 1) { e.preventDefault(); closeTab(id); }
+  });
   // drag to reorder — the tab goes translucent and the row re-flows live as a preview
   tabEl.draggable = true;
   tabEl.addEventListener("dragstart", ev => {
@@ -405,7 +410,7 @@ function createInst(tab, host) {
   const term = new Terminal({
     fontFamily: '"Cascadia Code", Consolas, monospace',
     fontSize: FONT_SIZE, theme: ACTIVE_TERM_THEME,
-    cursorStyle: "bar", cursorBlink: true,
+    cursorStyle: "bar", cursorBlink: false,   // blink off — CSS "phase" pulse instead
     scrollback: SCROLLBACK, allowProposedApi: true,
   });
   const fit = new FitAddon.FitAddon();

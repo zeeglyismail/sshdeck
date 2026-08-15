@@ -75,7 +75,8 @@ DnD + natural sort (base, 1, 2, …, 10) · host duplicate/context menus · resi
 sidebar · tunnels (local forwards, ports 15000-15020 published) · mobaconf
 import/export · full JSON backup/restore · theme JSON · multi-user · logging ·
 configurable scrollback (default 50k, Settings) · identity picker live-syncs the
-username field in the host modal.
+username field in the host modal · middle-click closes terminal tabs ·
+"phase" cursor pulse (CSS animation on .xterm-cursor, xterm blink disabled).
 
 ## Decisions already made (don't relitigate)
 
