@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SSHDeck</title>
+<link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand">SSH<span>Deck</span> <span class="badge">desktop · M1</span></div>
+    <div class="top-right">
+      <button id="new-term" class="btn-primary small">+ Local terminal</button>
+    </div>
+  </header>
+  <div id="tabrow"><div id="tabbar"></div></div>
+  <div id="panes">
+    <div id="empty" class="empty">
+      <div class="empty-logo">⌁</div>
+      <p>Milestone 1 — local terminal over ConPTY.<br>Click <b>+ Local terminal</b> to start PowerShell.</p>
+    </div>
+  </div>
+</div>
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

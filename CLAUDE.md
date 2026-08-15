@@ -96,9 +96,10 @@ username field in the host modal · middle-click closes terminal tabs ·
 
 ## Parked / next (waiting for owner's go)
 
-1. **Desktop exe** (top priority when started): pywebview + PyInstaller shell around
-   the same backend/frontend, Windows first, then GitHub Actions matrix for
-   Linux/macOS. Data dir → %APPDATA%\SSHDeck. X11 support could follow via VcXsrv.
+1. **Desktop exe — IN PROGRESS in `rust/` (Tauri 2 experiment)**. See `rust/CLAUDE.md`
+   for its own context: milestones, feature checklist (splits/multiexec return there,
+   cursor style options, both-direction tunnels, local terminal, reset, warnings),
+   and the evaluation gate vs the pywebview fallback.
 2. Remote / dynamic (SOCKS) forwarding on top of tunnels.
 3. Transfer acceleration (exec `cat` streaming).
 4. SSH host key verification (currently `known_hosts=None` — LAN tool), TOTP login.
