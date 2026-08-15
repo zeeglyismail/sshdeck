@@ -77,14 +77,31 @@ def move_folder(folder_id: int, body: FolderMoveIn, user=Depends(auth.current_us
     return {"ok": True}
 
 
+@router.get("/folders/{folder_id}/usage")
+def folder_usage(folder_id: int, user=Depends(auth.current_user)):
+    """How many hosts / sub-folders live under this folder (for the delete prompt)."""
+    uid = user["id"]
+    ids = _descendants(uid, folder_id)
+    marks = ",".join("?" * len(ids))
+    hosts = db.q(f"SELECT label FROM hosts WHERE user_id=? AND folder_id IN ({marks}) ORDER BY label",
+                 (uid, *ids))
+    return {"hosts": [r["label"] for r in hosts], "subfolders": len(ids) - 1}
+
+
 @router.delete("/folders/{folder_id}")
-def delete_folder(folder_id: int, user=Depends(auth.current_user)):
-    """Delete a folder and its sub-folders; hosts inside move to the parent folder."""
+def delete_folder(folder_id: int, delete_hosts: bool = False, user=Depends(auth.current_user)):
+    """Delete a folder and its sub-folders. Hosts inside either move to the parent
+    folder (default) or are deleted too (?delete_hosts=true)."""
     uid = user["id"]
     row = db.one("SELECT parent_id FROM folders WHERE id=? AND user_id=?", (folder_id, uid))
     parent = row["parent_id"] if row else None
     for fid in _descendants(uid, folder_id):
-        db.x("UPDATE hosts SET folder_id=? WHERE folder_id=? AND user_id=?", (parent, fid, uid))
+        if delete_hosts:
+            for h in db.q("SELECT id FROM hosts WHERE folder_id=? AND user_id=?", (fid, uid)):
+                manager.drop(uid, h["id"])
+            db.x("DELETE FROM hosts WHERE folder_id=? AND user_id=?", (fid, uid))
+        else:
+            db.x("UPDATE hosts SET folder_id=? WHERE folder_id=? AND user_id=?", (parent, fid, uid))
         db.x("DELETE FROM folders WHERE id=? AND user_id=?", (fid, uid))
     return {"ok": True}
 

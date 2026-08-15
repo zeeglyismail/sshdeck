@@ -169,6 +169,12 @@ body.resizing * { transition: none !important; }
 .modal-actions { display: flex; gap: 8px; margin-top: 18px; align-items: center; }
 .modal-actions .spacer { flex: 1; }
 
+#choice-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 60; animation: fadeIn .14s ease; }
+.modal.choice { width: 480px; }
+.modal.choice p { line-height: 1.6; color: var(--fg); }
+.modal.choice .modal-actions { justify-content: flex-end; }
+.mono { font-family: var(--mono); font-size: 12px; }
+
 .ctxmenu { position: fixed; z-index: 100; min-width: 140px; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.55); padding: 4px; display: flex; flex-direction: column; animation: popIn .12s ease; transform-origin: top left; }
 .ctxmenu button { background: none; border: none; color: var(--fg); text-align: left; padding: 7px 12px; border-radius: 4px; font-size: 13px; }
 .ctxmenu button:hover { background: var(--bg3); color: var(--accent); }

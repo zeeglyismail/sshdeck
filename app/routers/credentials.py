@@ -42,11 +42,24 @@ def update_identity(ident_id: int, body: IdentityIn, user=Depends(auth.current_u
 
 @router.delete("/identities/{ident_id}")
 def delete_identity(ident_id: int, user=Depends(auth.current_user)):
-    used = db.one("SELECT id FROM hosts WHERE identity_id=? AND user_id=?", (ident_id, user["id"]))
-    if used:
-        raise HTTPException(409, "Identity is used by a saved host")
-    db.x("DELETE FROM identities WHERE id=? AND user_id=?", (ident_id, user["id"]))
-    return {"ok": True}
+    """Delete an identity; hosts using it fall back to password auth with no
+    stored credential (edit them later) instead of blocking the delete."""
+    uid = user["id"]
+    hosts = db.q("SELECT id FROM hosts WHERE identity_id=? AND user_id=?", (ident_id, uid))
+    for h in hosts:
+        manager.drop(uid, h["id"])
+    db.x("UPDATE hosts SET auth_type='password', identity_id=NULL "
+         "WHERE identity_id=? AND user_id=?", (ident_id, uid))
+    db.x("DELETE FROM identities WHERE id=? AND user_id=?", (ident_id, uid))
+    logger.info("identity %s deleted by user=%s; %s hosts detached", ident_id, user["username"], len(hosts))
+    return {"ok": True, "detached": len(hosts)}
+
+
+@router.get("/identities/{ident_id}/usage")
+def identity_usage(ident_id: int, user=Depends(auth.current_user)):
+    rows = db.q("SELECT label FROM hosts WHERE identity_id=? AND user_id=? ORDER BY label",
+                (ident_id, user["id"]))
+    return {"hosts": [r["label"] for r in rows]}
 
 
 # ---------- SSH keys ----------
@@ -68,8 +81,17 @@ def create_key(body: KeyIn, user=Depends(auth.current_user)):
 
 @router.delete("/keys/{key_id}")
 def delete_key(key_id: int, user=Depends(auth.current_user)):
-    used = db.one("SELECT id FROM hosts WHERE key_id=? AND user_id=?", (key_id, user["id"]))
-    if used:
-        raise HTTPException(409, "Key is used by a saved host")
-    db.x("DELETE FROM keys WHERE id=? AND user_id=?", (key_id, user["id"]))
-    return {"ok": True}
+    """Delete a key; hosts using it fall back to password auth (no credential)."""
+    uid = user["id"]
+    hosts = db.q("SELECT id FROM hosts WHERE key_id=? AND user_id=?", (key_id, uid))
+    for h in hosts:
+        manager.drop(uid, h["id"])
+    db.x("UPDATE hosts SET auth_type='password', key_id=NULL WHERE key_id=? AND user_id=?", (key_id, uid))
+    db.x("DELETE FROM keys WHERE id=? AND user_id=?", (key_id, uid))
+    return {"ok": True, "detached": len(hosts)}
+
+
+@router.get("/keys/{key_id}/usage")
+def key_usage(key_id: int, user=Depends(auth.current_user)):
+    rows = db.q("SELECT label FROM hosts WHERE key_id=? AND user_id=? ORDER BY label", (key_id, user["id"]))
+    return {"hosts": [r["label"] for r in rows]}

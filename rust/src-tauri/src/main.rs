@@ -157,19 +157,49 @@ fn host_duplicate(db: State<Db>, id: i64) -> Result<i64, String> {
     Ok(conn.last_insert_rowid())
 }
 
+#[derive(serde::Serialize)]
+struct Usage {
+    hosts: Vec<String>,
+    subfolders: usize,
+}
+
 #[tauri::command]
-fn folder_delete(db: State<Db>, id: i64) -> Result<(), String> {
-    // delete folder + sub-folders; hosts inside move up to the deleted folder's parent
+fn folder_usage(db: State<Db>, id: i64) -> Usage {
+    let conn = db.0.lock().unwrap();
+    let ids = folder_subtree(&conn, id);
+    let mut hosts = Vec::new();
+    for fid in &ids {
+        let mut st = conn.prepare("SELECT label FROM hosts WHERE folder_id=?1 ORDER BY label").unwrap();
+        hosts.extend(st.query_map([fid], |r| r.get::<_, String>(0)).unwrap().filter_map(Result::ok));
+    }
+    Usage { hosts, subfolders: ids.len() - 1 }
+}
+
+#[tauri::command]
+fn folder_delete(db: State<Db>, id: i64, delete_hosts: bool) -> Result<(), String> {
+    // delete folder + sub-folders; hosts inside either move up to the parent or go too
     let conn = db.0.lock().unwrap();
     let parent: Option<i64> = conn
         .query_row("SELECT parent_id FROM folders WHERE id=?1", [id], |r| r.get(0))
         .unwrap_or(None);
     for fid in folder_subtree(&conn, id) {
-        conn.execute("UPDATE hosts SET folder_id=?1 WHERE folder_id=?2", rusqlite::params![parent, fid])
-            .map_err(|e| e.to_string())?;
+        if delete_hosts {
+            conn.execute("DELETE FROM hosts WHERE folder_id=?1", [fid]).map_err(|e| e.to_string())?;
+        } else {
+            conn.execute("UPDATE hosts SET folder_id=?1 WHERE folder_id=?2", rusqlite::params![parent, fid])
+                .map_err(|e| e.to_string())?;
+        }
         conn.execute("DELETE FROM folders WHERE id=?1", [fid]).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn cred_usage(db: State<Db>, kind: String, id: i64) -> Vec<String> {
+    let conn = db.0.lock().unwrap();
+    let col = if kind == "key" { "key_id" } else { "identity_id" };
+    let mut st = conn.prepare(&format!("SELECT label FROM hosts WHERE {col}=?1 ORDER BY label")).unwrap();
+    st.query_map([id], |r| r.get::<_, String>(0)).unwrap().filter_map(Result::ok).collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -270,12 +300,9 @@ fn identity_save(
 #[tauri::command]
 fn identity_delete(db: State<Db>, id: i64) -> Result<(), String> {
     let conn = db.0.lock().unwrap();
-    let used: i64 = conn
-        .query_row("SELECT COUNT(*) FROM hosts WHERE identity_id=?1", [id], |r| r.get(0))
+    // hosts using it fall back to password auth with no credential — never block the delete
+    conn.execute("UPDATE hosts SET auth_type='password', identity_id=NULL WHERE identity_id=?1", [id])
         .map_err(|e| e.to_string())?;
-    if used > 0 {
-        return Err("Identity is used by a saved host".into());
-    }
     conn.execute("DELETE FROM identities WHERE id=?1", [id])
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -302,12 +329,8 @@ fn key_save(
 #[tauri::command]
 fn key_delete(db: State<Db>, id: i64) -> Result<(), String> {
     let conn = db.0.lock().unwrap();
-    let used: i64 = conn
-        .query_row("SELECT COUNT(*) FROM hosts WHERE key_id=?1", [id], |r| r.get(0))
+    conn.execute("UPDATE hosts SET auth_type='password', key_id=NULL WHERE key_id=?1", [id])
         .map_err(|e| e.to_string())?;
-    if used > 0 {
-        return Err("Key is used by a saved host".into());
-    }
     conn.execute("DELETE FROM keys WHERE id=?1", [id])
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -405,7 +428,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             pty_spawn, pty_write, pty_resize, pty_kill,
-            state_get, folder_save, folder_rename, folder_move, folder_delete,
+            state_get, folder_save, folder_rename, folder_move, folder_delete, folder_usage, cred_usage,
             host_save, host_delete, host_move, host_duplicate,
             identity_save, identity_delete, key_save, key_delete,
             ssh_spawn, ssh_write, ssh_resize, ssh_kill,

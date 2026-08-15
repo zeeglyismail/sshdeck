@@ -132,6 +132,36 @@ function natCompare(a, b) {
   return 0;
 }
 
+/* small choice dialog: resolves to the clicked button's value (null on cancel) */
+function choose(title, message, buttons) {
+  return new Promise(resolve => {
+    const bg = document.createElement("div");
+    bg.id = "choice-bg";
+    bg.innerHTML = `<div class="modal choice"><h3>${esc(title)}</h3><p>${message}</p><div class="modal-actions"></div></div>`;
+    const acts = bg.querySelector(".modal-actions");
+    const done = v => { bg.remove(); resolve(v); };
+    for (const b of buttons) {
+      const btn = document.createElement("button");
+      btn.className = b.cls || "btn-ghost";
+      btn.textContent = b.label;
+      btn.onclick = () => done(b.value);
+      acts.appendChild(btn);
+    }
+    bg.addEventListener("mousedown", e => { if (e.target === bg) done(null); });
+    document.body.appendChild(bg);
+  });
+}
+async function confirmCredDelete(kind, name, id) {
+  const hosts = await invoke("cred_usage", { kind, id });
+  const n = hosts.length;
+  const msg = n
+    ? `<b>${n} host${n > 1 ? "s" : ""}</b> use this ${kind}: <span class="muted mono">${hosts.slice(0, 8).map(esc).join(", ")}${n > 8 ? ` … +${n - 8}` : ""}</span><br><br>` +
+      `They will switch to <b>password auth with no saved credential</b> — edit them later to set a new one. Hosts are not deleted.`
+    : `No hosts use this ${kind}.`;
+  return (await choose(`Delete ${kind} "${name}"?`, msg,
+    [{ label: "Cancel", value: null }, { label: "Delete", value: "yes", cls: "btn-danger" }])) === "yes";
+}
+
 /* context menu */
 let ctxEl = null;
 function closeCtx() { if (ctxEl) { ctxEl.remove(); ctxEl = null; } }
@@ -263,10 +293,20 @@ function renderTree() {
         } },
       { label: "Move to root", fn: () => moveFolder(f.id, null) },
       { label: "Delete", danger: true, fn: async () => {
-          if (confirm(`Delete folder "${f.name}" and its sub-folders? (hosts move up one level)`)) {
-            await invoke("folder_delete", { id: f.id });
-            loadState();
-          }
+          const u = await invoke("folder_usage", { id: f.id });
+          const n = u.hosts.length;
+          const detail = n
+            ? `<b>${n} host${n > 1 ? "s" : ""}</b> inside${u.subfolders ? ` (${u.subfolders} sub-folder${u.subfolders > 1 ? "s" : ""})` : ""}:<br>` +
+              `<span class="muted mono">${u.hosts.slice(0, 8).map(esc).join(", ")}${n > 8 ? ` … +${n - 8}` : ""}</span>`
+            : `Folder is empty${u.subfolders ? ` (${u.subfolders} empty sub-folder${u.subfolders > 1 ? "s" : ""})` : ""}.`;
+          const choice = await choose(`Delete folder "${f.name}"?`, detail, n
+            ? [{ label: "Cancel", value: null },
+               { label: "Delete folder, keep hosts", value: "keep", cls: "btn-primary" },
+               { label: `Delete folder + ${n} host${n > 1 ? "s" : ""}`, value: "all", cls: "btn-danger" }]
+            : [{ label: "Cancel", value: null }, { label: "Delete", value: "keep", cls: "btn-danger" }]);
+          if (!choice) return;
+          await invoke("folder_delete", { id: f.id, deleteHosts: choice === "all" });
+          loadState();
         } },
     ]);
     fe.addEventListener("dragover", ev => {
@@ -746,7 +786,7 @@ function renderIdentities() {
       } catch (e) { alert(e); }
     };
     item.querySelector(".del").onclick = async () => {
-      if (!confirm(`Delete identity "${i.name}"?`)) return;
+      if (!await confirmCredDelete("identity", i.name, i.id)) return;
       try { await invoke("identity_delete", { id: i.id }); loadState(); } catch (e) { alert(e); }
     };
     el.appendChild(item);
@@ -770,7 +810,7 @@ function renderKeys() {
     item.className = "key-item";
     item.innerHTML = `<span class="kname">🔑 ${esc(k.name)}</span><button class="btn-danger small">Delete</button>`;
     item.querySelector("button").onclick = async () => {
-      if (!confirm(`Delete key "${k.name}"?`)) return;
+      if (!await confirmCredDelete("key", k.name, k.id)) return;
       try { await invoke("key_delete", { id: k.id }); loadState(); } catch (e) { alert(e); }
     };
     el.appendChild(item);
