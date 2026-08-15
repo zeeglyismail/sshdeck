@@ -4,6 +4,7 @@ const $$ = s => [...document.querySelectorAll(s)];
 
 let STATE = { folders: [], hosts: [], keys: [], identities: [], username: "" };
 let FONT_SIZE = parseInt(localStorage.getItem("sshdeck.fontsize")) || 13;
+let SCROLLBACK = parseInt(localStorage.getItem("sshdeck.scrollback")) || 50000;
 const TABS = new Map();      // tabId -> {host, term, fit, ws, statsWs, el, tabEl, stats}
 let activeTab = null;
 let tabSeq = 0;
@@ -405,7 +406,7 @@ function createInst(tab, host) {
     fontFamily: '"Cascadia Code", Consolas, monospace',
     fontSize: FONT_SIZE, theme: ACTIVE_TERM_THEME,
     cursorStyle: "bar", cursorBlink: true,
-    scrollback: 5000, allowProposedApi: true,
+    scrollback: SCROLLBACK, allowProposedApi: true,
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
@@ -724,6 +725,7 @@ function openHostModal(host) {
   isel.innerHTML = STATE.identities.map(i =>
     `<option value="${i.id}">${esc(i.name)} (${esc(i.username)})</option>`).join("") ||
     '<option value="">(no identities saved)</option>';
+  delete $("#hm-user").dataset.own;
   $("#hm-label").value = host ? host.label : "";
   $("#hm-host").value = host ? host.hostname : "";
   $("#hm-port").value = host ? host.port : 22;
@@ -739,16 +741,30 @@ function openHostModal(host) {
   $("#hm-label").focus();
 }
 
+function syncIdentUser() {
+  const u = $("#hm-user");
+  if ($("#hm-auth").value === "identity") {
+    if (u.dataset.own === undefined) u.dataset.own = u.value;  // stash what they typed
+    const ident = STATE.identities.find(i => i.id === parseInt($("#hm-ident").value));
+    u.value = ident ? ident.username : "";
+  } else if (u.dataset.own !== undefined) {
+    u.value = u.dataset.own;                                    // restore on switch back
+    delete u.dataset.own;
+  }
+}
+
 function authTypeChanged() {
   const mode = $("#hm-auth").value;
   $("#hm-pw-wrap").classList.toggle("hidden", mode !== "password");
   $("#hm-key-wrap").classList.toggle("hidden", mode !== "key");
   $("#hm-ident-wrap").classList.toggle("hidden", mode !== "identity");
-  // identity carries its own username
+  // identity carries its own username — mirror it into the field so it's never stale
   $("#hm-user").disabled = mode === "identity";
   $("#hm-user").placeholder = mode === "identity" ? "(from identity)" : "devops";
+  syncIdentUser();
 }
 $("#hm-auth").onchange = authTypeChanged;
+$("#hm-ident").onchange = syncIdentUser;
 $("#hm-cancel").onclick = () => $("#modal-bg").classList.add("hidden");
 $("#modal-bg").addEventListener("mousedown", e => {
   if (e.target.id === "modal-bg") $("#modal-bg").classList.add("hidden");
@@ -1249,6 +1265,15 @@ $("#hl-toggle").checked = HL_ON;
 $("#hl-toggle").onchange = () => {
   HL_ON = $("#hl-toggle").checked;
   localStorage.setItem("sshdeck.hl", HL_ON ? "1" : "0");
+};
+
+$("#sb-lines").value = SCROLLBACK;
+$("#sb-lines").onchange = () => {
+  SCROLLBACK = Math.min(200000, Math.max(1000, parseInt($("#sb-lines").value) || 50000));
+  $("#sb-lines").value = SCROLLBACK;
+  localStorage.setItem("sshdeck.scrollback", SCROLLBACK);
+  for (const tab of TABS.values())
+    for (const t of tab.terms) t.term.options.scrollback = SCROLLBACK;
 };
 
 $("#theme-apply").onclick = () => {

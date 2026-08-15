@@ -150,6 +150,9 @@
           <h3>Terminal</h3>
           <label class="chk"><input type="checkbox" id="hl-toggle">
             Output highlighting — colorize IPs, MACs, UP/DOWN keywords (Moba-style, auto-off in nano/vim/htop)</label>
+          <label class="chk">Scrollback lines
+            <input type="number" id="sb-lines" min="1000" max="200000" step="1000" style="width:110px">
+            <span class="muted">history kept per terminal (default 50000 — higher uses more RAM; for huge files prefer <code>less</code>)</span></label>
 
           <h3>Theme</h3>
           <p class="muted">Paste a theme JSON and apply. Share the JSON with anyone to share your style.

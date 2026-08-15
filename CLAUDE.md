@@ -73,7 +73,9 @@ Terminals (tabs, reconnect, highlighting, zoom, copy/paste) · monitoring bar
 progress) · searchable host picker · identities & keys (encrypted) · folders with
 DnD + natural sort (base, 1, 2, …, 10) · host duplicate/context menus · resizable
 sidebar · tunnels (local forwards, ports 15000-15020 published) · mobaconf
-import/export · full JSON backup/restore · theme JSON · multi-user · logging.
+import/export · full JSON backup/restore · theme JSON · multi-user · logging ·
+configurable scrollback (default 50k, Settings) · identity picker live-syncs the
+username field in the host modal.
 
 ## Decisions already made (don't relitigate)
 
