@@ -240,7 +240,9 @@ body.resizing * { transition: none !important; }
 .tr-item.error .status { color: var(--danger); }
 
 /* ---------- pages ---------- */
-.page { padding: 24px; max-width: 720px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.page { padding: 24px 32px; width: 100%; max-width: 1400px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.page > * { max-width: 100%; }
+.page .grid2 { max-width: 1000px; }
 .page h2 { font-size: 18px; }
 .page h3 { font-size: 14px; margin-top: 12px; color: var(--accent); }
 #keylist .key-item {

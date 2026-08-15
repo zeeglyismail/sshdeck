@@ -149,7 +149,12 @@ body.resizing * { transition: none !important; }
 .tr-item.done .status { color: var(--accent); }
 .tr-item.error .status { color: var(--danger); }
 
-.page { padding: 24px; max-width: 760px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+/* settings/tunnels pages fill the window; content stays readable via a wide inner column */
+.page { padding: 24px 32px; width: 100%; max-width: 1400px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.page > * { max-width: 100%; }
+.page textarea, .page input:not([type=checkbox]):not([type=number]), .page select { width: 100%; }
+.page .grid2 { max-width: 1000px; }
+.page .row-gap input { width: auto; flex: 1; }
 .page h2 { font-size: 18px; }
 .page h3 { font-size: 14px; margin-top: 12px; color: var(--accent); }
 .key-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; }

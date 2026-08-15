@@ -15,7 +15,7 @@ repo root stays alive either way — this is a second product from the same repo
 
 | Metric              | Target (Tauri) | pywebview est. | Measured (M1, release)        |
 |---------------------|----------------|----------------|-------------------------------|
-| exe / install size  | ≤ 15 MB        | ~60 MB         | **3.0 MB** single exe         |
+| exe / install size  | ≤ 15 MB        | ~60 MB         | **3.0 MB** (M1) → **5.7 MB** (M5, full feature set) single exe |
 | idle RAM (1 tab)    | ≤ 200 MB       | ~250 MB        | **29 MB** main + ~327 MB WebView2 pool (system-shared, same for any webview approach) |
 | cold start          | < 1 s          | ~2 s           | **305 ms** to window          |
 
@@ -88,6 +88,9 @@ If `cargo tauri` is missing: `cargo install tauri-cli --locked`.
 
 ## Gotchas learned the hard way
 
+- **Launch the RELEASE exe for the owner** (`cargo build --release`, target/release/): the debug
+  exe attaches a console window that shows harmless WebView2 log noise. Release has
+  `windows_subsystem = "windows"` → no console.
 - **The exe embeds `ui/` at compile time.** Every frontend edit needs
   `cargo build` + relaunch — there is no hard-refresh. (Kill the running exe first
   or the linker can't overwrite it.)
