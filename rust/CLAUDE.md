@@ -13,14 +13,16 @@ repo root stays alive either way — this is a second product from the same repo
 
 ## Evaluation gate (fill in when measured)
 
-| Metric              | Target (Tauri) | pywebview est. | Measured |
-|---------------------|----------------|----------------|----------|
-| exe / install size  | ≤ 15 MB        | ~60 MB         |          |
-| idle RAM (1 tab)    | ≤ 200 MB       | ~250 MB        |          |
-| cold start          | < 1 s          | ~2 s           |          |
+| Metric              | Target (Tauri) | pywebview est. | Measured (M1, release)        |
+|---------------------|----------------|----------------|-------------------------------|
+| exe / install size  | ≤ 15 MB        | ~60 MB         | **3.0 MB** single exe         |
+| idle RAM (1 tab)    | ≤ 200 MB       | ~250 MB        | **29 MB** main + ~327 MB WebView2 pool (system-shared, same for any webview approach) |
+| cold start          | < 1 s          | ~2 s           | **305 ms** to window          |
 
-Milestone 2 (SSH parity) is the honest decision point: Tauri wins on footprint by
-default; the question is whether the russh rewrite of the backend is worth it.
+**DECISION (owner-approved after M1 demo): Rust/Tauri it is.** 3 MB exe, 0.3 s start,
+tiny main process — pywebview fallback is dead; all desktop work continues here.
+The WebView2 pool cost is identical for every webview framework, so Rust wins on
+everything that differs. Owner's reaction to M1: "feels super smooth".
 
 ## Architecture (desktop)
 
