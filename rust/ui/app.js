@@ -522,6 +522,7 @@ function showView(name) {
   $$(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.view === name));
   $$(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + name));
   if (name === "terms" && activeTab) setTimeout(fitActive, 10);
+  if (name === "files") renderPaneHostOptions();
 }
 
 /* ---------- host modal ---------- */
@@ -665,6 +666,249 @@ $("#key-add").onclick = async () => {
   $("#key-name").value = $("#key-priv").value = $("#key-pass").value = "";
   loadState();
 };
+
+/* ---------- files (SFTP dual pane) ---------- */
+
+const PANES = [
+  { hostId: null, path: ".", entries: [], selIdx: new Set(), anchor: null, optMap: {} },
+  { hostId: null, path: ".", entries: [], selIdx: new Set(), anchor: null, optMap: {} },
+];
+
+function fmtBytes(n) {
+  if (n == null) return "–";
+  const u = ["B", "kB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(n >= 100 ? 0 : 2)) + " " + u[i];
+}
+function fmtDate(t) {
+  if (!t) return "";
+  return new Date(t * 1000).toLocaleString(undefined,
+    { year: "2-digit", month: "numeric", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+function joinPath(dir, name) { return dir.replace(/\/+$/, "") + "/" + name; }
+function parentPath(p) {
+  const parts = p.replace(/\/+$/, "").split("/");
+  parts.pop();
+  return parts.join("/") || "/";
+}
+function hostById(id) { return STATE.hosts.find(h => h.id === id); }
+
+function renderPaneHostOptions() {
+  $$(".fpane").forEach((paneEl, i) => {
+    if (!paneEl.dataset.built) buildPane(paneEl, i);
+    const P = PANES[i];
+    const dl = paneEl.querySelector("datalist");
+    P.optMap = {};
+    dl.innerHTML = STATE.hosts.map(h => {
+      const ident = h.identity_id ? STATE.identities.find(x => x.id === h.identity_id) : null;
+      const u = h.auth_type === "identity" && ident ? ident.username : h.username;
+      let text = h.label.includes(u) && u ? h.label : `${h.label} (${u})`;
+      if (P.optMap[text]) text += ` #${h.id}`;
+      P.optMap[text] = h.id;
+      return `<option value="${esc(text)}">`;
+    }).join("");
+  });
+}
+
+function buildPane(paneEl, i) {
+  paneEl.dataset.built = "1";
+  paneEl.innerHTML = `
+    <div class="fp-head">
+      <input class="hostsel" list="hostlist${i}" placeholder="🔍 search host…" spellcheck="false" autocomplete="off">
+      <datalist id="hostlist${i}"></datalist>
+      <input class="path" value="." spellcheck="false" title="path — press Enter">
+      <button class="btn-ghost small go" title="Go / refresh">⟳</button>
+    </div>
+    <div class="fp-tools">
+      <button class="up">⬆ up</button>
+      <button class="upload">Upload</button>
+      <button class="mkdir">+ dir</button>
+      <button class="rename">Rename</button>
+      <button class="chmod">chmod</button>
+      <button class="del">Delete</button>
+      <button class="dl">Download</button>
+    </div>
+    <div class="fp-list"><div class="fp-empty">Select a host to browse.</div></div>`;
+
+  const P = PANES[i];
+  const sel = paneEl.querySelector(".hostsel");
+  const pathInput = paneEl.querySelector(".path");
+  const listEl = paneEl.querySelector(".fp-list");
+
+  function pickHost() {
+    const id = P.optMap && P.optMap[sel.value];
+    if (id) { P.hostId = id; P.path = "."; sel.title = sel.value; load("."); sel.blur(); }
+  }
+  sel.addEventListener("change", pickHost);
+  sel.addEventListener("input", pickHost);
+  sel.addEventListener("focus", () => sel.select());
+
+  async function load(path) {
+    if (!P.hostId) return;
+    listEl.innerHTML = '<div class="fp-empty">loading…</div>';
+    try {
+      const r = await invoke("sftp_list", { hostId: P.hostId, path: path ?? P.path });
+      P.path = r.path;
+      P.entries = r.entries;
+      P.selIdx = new Set();
+      P.anchor = null;
+      pathInput.value = r.path;
+      renderList();
+    } catch (e) {
+      listEl.innerHTML = `<div class="fp-empty">✗ ${esc(e)}</div>`;
+    }
+  }
+  P.load = load;
+  const selected = () => [...P.selIdx].sort((a, b) => a - b).map(k => P.entries[k]).filter(Boolean);
+
+  function renderList() {
+    if (!P.entries.length) { listEl.innerHTML = '<div class="fp-empty">(empty directory)</div>'; return; }
+    const rows = P.entries.map((e, idx) => `
+      <tr class="fp-row ${e.is_dir ? "dir" : ""}" draggable="true" data-i="${idx}">
+        <td class="fname"><span class="ficon">${e.is_dir ? "📁" : "📄"}</span>${esc(e.name)}</td>
+        <td class="fsize">${e.is_dir ? "" : fmtBytes(e.size)}</td>
+        <td class="fperm">${e.perm}</td>
+        <td class="fdate">${fmtDate(e.mtime)}</td>
+      </tr>`).join("");
+    listEl.innerHTML = `<table class="fp-table">
+      <thead><tr><th>Name</th><th>Size</th><th>Perm</th><th>Modified</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+    const syncSel = () => listEl.querySelectorAll(".fp-row").forEach(r =>
+      r.classList.toggle("sel", P.selIdx.has(+r.dataset.i)));
+    listEl.querySelectorAll(".fp-row").forEach(row => {
+      const idx = +row.dataset.i;
+      const entry = P.entries[idx];
+      row.onclick = ev => {
+        if (ev.ctrlKey || ev.metaKey) { P.selIdx.has(idx) ? P.selIdx.delete(idx) : P.selIdx.add(idx); P.anchor = idx; }
+        else if (ev.shiftKey && P.anchor !== null) {
+          P.selIdx = new Set();
+          const [a, b] = [Math.min(P.anchor, idx), Math.max(P.anchor, idx)];
+          for (let k = a; k <= b; k++) P.selIdx.add(k);
+        } else { P.selIdx = new Set([idx]); P.anchor = idx; }
+        syncSel();
+      };
+      row.ondblclick = () => { if (entry.is_dir) load(joinPath(P.path, entry.name)); };
+      row.ondragstart = ev => {
+        if (!P.selIdx.has(idx)) { P.selIdx = new Set([idx]); P.anchor = idx; syncSel(); }
+        const items = selected().map(e => ({ path: joinPath(P.path, e.name), is_dir: e.is_dir, name: e.name }));
+        ev.dataTransfer.setData("application/x-deck", JSON.stringify({ pane: i, hostId: P.hostId, items }));
+        ev.dataTransfer.effectAllowed = "copy";
+      };
+    });
+  }
+
+  pathInput.addEventListener("keydown", e => { if (e.key === "Enter") load(pathInput.value); });
+  paneEl.querySelector(".go").onclick = () => load(pathInput.value);
+  paneEl.querySelector(".up").onclick = () => load(parentPath(P.path));
+
+  paneEl.querySelector(".upload").onclick = async () => {
+    if (!P.hostId) return;
+    const files = await window.__TAURI__.dialog.open({ multiple: true, title: "Upload to " + P.path });
+    if (!files) return;
+    const host = hostById(P.hostId);
+    for (const f of [].concat(files))
+      await invoke("sftp_upload", { hostId: P.hostId, localPath: f, remoteDir: P.path, hostLabel: host.label })
+        .catch(e => alert(e));
+  };
+  paneEl.querySelector(".dl").onclick = async () => {
+    const sel = selected().filter(e => !e.is_dir);
+    if (!sel.length) return alert("Select file(s) first (directories: drag to the other pane)");
+    const host = hostById(P.hostId);
+    for (const e of sel) {
+      const dest = await window.__TAURI__.dialog.save({ defaultPath: e.name, title: "Save " + e.name });
+      if (!dest) continue;
+      await invoke("sftp_download", { hostId: P.hostId, remotePath: joinPath(P.path, e.name), localPath: dest, hostLabel: host.label })
+        .catch(e2 => alert(e2));
+    }
+  };
+  paneEl.querySelector(".mkdir").onclick = async () => {
+    if (!P.hostId) return;
+    const name = prompt("New directory name:");
+    if (!name) return;
+    try { await invoke("sftp_mkdir", { hostId: P.hostId, path: joinPath(P.path, name) }); load(); }
+    catch (e) { alert(e); }
+  };
+  paneEl.querySelector(".rename").onclick = async () => {
+    const sel = selected();
+    if (sel.length !== 1) return alert("Select exactly one item");
+    const name = prompt("Rename to:", sel[0].name);
+    if (!name || name === sel[0].name) return;
+    try {
+      await invoke("sftp_rename", { hostId: P.hostId, path: joinPath(P.path, sel[0].name), newPath: joinPath(P.path, name) });
+      load();
+    } catch (e) { alert(e); }
+  };
+  paneEl.querySelector(".chmod").onclick = async () => {
+    const sel = selected();
+    if (!sel.length) return alert("Select file(s) first");
+    const mode = prompt(`chmod ${sel.length === 1 ? sel[0].name : sel.length + " items"} (octal):`, "644");
+    if (!mode) return;
+    try {
+      for (const e of sel) await invoke("sftp_chmod", { hostId: P.hostId, path: joinPath(P.path, e.name), mode });
+      load();
+    } catch (e) { alert(e); }
+  };
+  paneEl.querySelector(".del").onclick = async () => {
+    const sel = selected();
+    if (!sel.length) return alert("Select file(s) first");
+    const label = sel.length === 1 ? `"${sel[0].name}"` : `${sel.length} items`;
+    if (!confirm(`Delete ${label}?`)) return;
+    try {
+      for (const e of sel) await invoke("sftp_delete", { hostId: P.hostId, path: joinPath(P.path, e.name), isDir: e.is_dir });
+      load();
+    } catch (e) { alert(e); }
+  };
+
+  paneEl.addEventListener("dragover", ev => {
+    ev.preventDefault();
+    paneEl.classList.add("dragover");
+    ev.dataTransfer.dropEffect = "copy";
+  });
+  paneEl.addEventListener("dragleave", ev => {
+    if (!paneEl.contains(ev.relatedTarget)) paneEl.classList.remove("dragover");
+  });
+  paneEl.addEventListener("drop", async ev => {
+    ev.preventDefault();
+    paneEl.classList.remove("dragover");
+    if (!P.hostId) return;
+    const raw = ev.dataTransfer.getData("application/x-deck");
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    if (d.pane === i && d.hostId === P.hostId) return;
+    const src = hostById(d.hostId), dst = hostById(P.hostId);
+    for (const item of d.items)
+      await invoke("transfer_start", {
+        srcHostId: d.hostId, srcPath: item.path, dstHostId: P.hostId, dstDir: P.path,
+        isDir: item.is_dir, srcLabel: src.label, dstLabel: dst.label,
+      }).catch(e => alert(e));
+  });
+}
+
+/* transfers strip */
+listen("transfers", ev => {
+  const list = ev.payload;
+  const box = $("#transfers");
+  const el = $("#tr-list");
+  box.classList.toggle("hidden", !list.length);
+  el.innerHTML = "";
+  let anyDone = false;
+  for (const t of list) {
+    if (t.status !== "running") anyDone = true;
+    const item = document.createElement("div");
+    item.className = "tr-item " + t.status;
+    const pct = t.total ? Math.round(t.done / t.total * 100) : null;
+    item.innerHTML = `
+      <span class="desc" title="${esc(t.desc)}">${esc(t.desc)}</span>
+      <span class="meter"><i style="width:${pct ?? (t.status === "done" ? 100 : 30)}%"></i></span>
+      <span class="status">${t.status === "running"
+        ? fmtBytes(t.done) + (t.total ? " / " + fmtBytes(t.total) : "")
+        : t.status === "error" ? "✗ " + esc(t.error || "failed") : "✓ " + fmtBytes(t.done)}</span>`;
+    el.appendChild(item);
+  }
+  if (anyDone) PANES.forEach(P => { if (P.hostId && P.load) P.load(); });
+});
+$("#tr-clear").onclick = () => invoke("transfers_clear");
 
 /* ---------- boot ---------- */
 

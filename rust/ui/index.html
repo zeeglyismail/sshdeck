@@ -12,6 +12,7 @@
     <div class="brand">SSH<span>Deck</span></div>
     <nav id="mainnav">
       <button data-view="terms" class="nav-btn active">Terminals</button>
+      <button data-view="files" class="nav-btn">Files</button>
       <button data-view="settings" class="nav-btn">Settings</button>
     </nav>
     <div class="top-right">
@@ -49,6 +50,17 @@
           <span class="st-item st-users-wrap">USERS <b id="st-users">–</b><div id="who-pop"></div></span>
           <span class="st-conn" id="st-conn">connected</span>
         </footer>
+      </section>
+
+      <section id="view-files" class="view">
+        <div id="filepanes">
+          <div class="fpane" data-pane="0"></div>
+          <div class="fpane" data-pane="1"></div>
+        </div>
+        <div id="transfers" class="hidden">
+          <div class="tr-head">Transfers <button id="tr-clear" class="btn-ghost small">clear finished</button></div>
+          <div id="tr-list"></div>
+        </div>
       </section>
 
       <section id="view-settings" class="view">

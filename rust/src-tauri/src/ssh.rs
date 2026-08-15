@@ -23,7 +23,7 @@ pub struct ConnectSpec {
     pub key_pass: Option<String>,
 }
 
-struct Client;
+pub struct Client;
 
 #[async_trait::async_trait]
 impl client::Handler for Client {
@@ -35,6 +35,24 @@ impl client::Handler for Client {
     ) -> Result<bool, Self::Error> {
         Ok(true) // LAN tool: trust-on-use, host key pinning is on the roadmap
     }
+}
+
+/// Pooled connections for SFTP / transfers — one shared connection per host,
+/// separate from the per-terminal connections spawn_session makes.
+#[derive(Default)]
+pub struct SshPool(pub tokio::sync::Mutex<HashMap<i64, Arc<Handle<Client>>>>);
+
+pub async fn pooled(pool: &SshPool, host_id: i64, spec: ConnectSpec) -> Result<Arc<Handle<Client>>, String> {
+    let mut map = pool.0.lock().await;
+    if let Some(h) = map.get(&host_id) {
+        if !h.is_closed() {
+            return Ok(h.clone());
+        }
+        map.remove(&host_id);
+    }
+    let h = Arc::new(connect(&spec).await?);
+    map.insert(host_id, h.clone());
+    Ok(h)
 }
 
 async fn connect(spec: &ConnectSpec) -> Result<Handle<Client>, String> {

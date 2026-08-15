@@ -45,7 +45,8 @@ everything that differs. Owner's reaction to M1: "feels super smooth".
 - [ ] Local terminal tabs (PowerShell / cmd / WSL picker) — M1
 - [ ] SSH terminals with saved hosts/identities/keys — M2
 - [ ] Monitoring bar + graphs (reuse stats command from `app/ws.py`) — M2
-- [ ] SFTP dual pane + host↔host transfer — M3
+- [x] SFTP dual pane + host↔host transfer — M3 (russh-sftp; native file dialogs
+      for upload/download; live progress via `transfers` event)
 - [ ] Tunnels: local→remote, **remote→local**, SOCKS — natively bound, no Docker — M4
 - [ ] Splits + MultiExec (broadcast typing) — removed from web on purpose,
       REQUESTED for desktop — M5. **Each split lets you choose its source:

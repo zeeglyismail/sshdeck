@@ -4,6 +4,7 @@
 
 mod crypto;
 mod db;
+mod sftp;
 mod ssh;
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
@@ -245,15 +246,11 @@ fn key_delete(db: State<Db>, id: i64) -> Result<(), String> {
 
 // ---------- SSH sessions (M2) ----------
 
-#[tauri::command]
-fn ssh_spawn(
-    app: AppHandle,
-    db: State<Db>,
-    crypto: State<Crypto>,
-    sessions: State<SshSessions>,
-    id: u32,
-    host_id: i64,
-) -> Result<(), String> {
+/// Resolve a host row + credentials into a ConnectSpec (shared by terminals,
+/// SFTP and transfers).
+pub(crate) fn build_spec(app: &AppHandle, host_id: i64) -> Result<ConnectSpec, String> {
+    let db = app.state::<Db>();
+    let crypto = app.state::<Crypto>();
     let conn = db.0.lock().unwrap();
     let (hostname, port, mut username, auth_type, password_enc, key_id, identity_id): (
         String, u16, String, String, Option<String>, Option<i64>, Option<i64>,
@@ -288,14 +285,18 @@ fn ssh_spawn(
         key_pem = crypto.dec(&pk);
         key_pass = pp.as_deref().and_then(|e| crypto.dec(e));
     }
-    drop(conn);
+    Ok(ConnectSpec { hostname, port, username, password, key_pem, key_pass })
+}
 
-    ssh::spawn_session(
-        app,
-        &sessions,
-        id,
-        ConnectSpec { hostname, port, username, password, key_pem, key_pass },
-    );
+#[tauri::command]
+fn ssh_spawn(
+    app: AppHandle,
+    sessions: State<SshSessions>,
+    id: u32,
+    host_id: i64,
+) -> Result<(), String> {
+    let spec = build_spec(&app, host_id)?;
+    ssh::spawn_session(app, &sessions, id, spec);
     Ok(())
 }
 
@@ -322,8 +323,11 @@ fn ssh_kill(sessions: State<SshSessions>, id: u32) {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(Ptys::default())
         .manage(SshSessions::default())
+        .manage(ssh::SshPool::default())
+        .manage(sftp::Transfers::default())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             app.manage(db::open(data_dir.clone()));
@@ -334,7 +338,10 @@ fn main() {
             pty_spawn, pty_write, pty_resize, pty_kill,
             state_get, folder_save, folder_delete, host_save, host_delete,
             identity_save, identity_delete, key_save, key_delete,
-            ssh_spawn, ssh_write, ssh_resize, ssh_kill
+            ssh_spawn, ssh_write, ssh_resize, ssh_kill,
+            sftp::sftp_list, sftp::sftp_mkdir, sftp::sftp_rename, sftp::sftp_chmod,
+            sftp::sftp_delete, sftp::sftp_download, sftp::sftp_upload,
+            sftp::transfer_start, sftp::transfers_clear
         ])
         .run(tauri::generate_context!())
         .expect("error while running SSHDeck");
