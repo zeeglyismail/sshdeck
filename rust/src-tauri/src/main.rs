@@ -6,6 +6,7 @@ mod crypto;
 mod db;
 mod sftp;
 mod ssh;
+mod tunnels;
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
@@ -420,9 +421,12 @@ fn main() {
         .manage(SshSessions::default())
         .manage(ssh::SshPool::default())
         .manage(sftp::Transfers::default())
+        .manage(tunnels::Active::default())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("app data dir");
-            app.manage(db::open(data_dir.clone()));
+            let database = db::open(data_dir.clone());
+            tunnels::ensure_schema(&database.0.lock().unwrap());
+            app.manage(database);
             app.manage(Crypto::load(data_dir));
             Ok(())
         })
@@ -434,7 +438,9 @@ fn main() {
             ssh_spawn, ssh_write, ssh_resize, ssh_kill,
             sftp::sftp_list, sftp::sftp_mkdir, sftp::sftp_rename, sftp::sftp_chmod,
             sftp::sftp_delete, sftp::sftp_download, sftp::sftp_upload,
-            sftp::transfer_start, sftp::transfers_clear
+            sftp::transfer_start, sftp::transfers_clear,
+            tunnels::tunnels_list, tunnels::tunnel_save, tunnels::tunnel_delete,
+            tunnels::tunnel_start, tunnels::tunnel_stop
         ])
         .run(tauri::generate_context!())
         .expect("error while running SSHDeck");

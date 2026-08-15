@@ -671,6 +671,7 @@ function showView(name) {
   $$(".nav-btn").forEach(b => b.classList.toggle("active", b.dataset.view === name));
   $$(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + name));
   if (name === "terms" && activeTab) setTimeout(fitActive, 10);
+  if (name === "tunnels") loadTunnels();
   if (name === "files") renderPaneHostOptions();
 }
 
@@ -1067,6 +1068,83 @@ listen("transfers", ev => {
   if (anyDone) PANES.forEach(P => { if (P.hostId && P.load) P.load(); });
 });
 $("#tr-clear").onclick = () => invoke("transfers_clear");
+
+/* ---------- tunnels (M4) ---------- */
+
+const TUN_HINT = {
+  local:  "Connect your app to <b>localhost:LISTEN</b>; traffic exits the SSH host toward <b>destination</b> (e.g. a DB bound to 127.0.0.1 on the server, or another box the server can reach).",
+  remote: "The <b>server</b> listens on LISTEN; anything connecting there is tunneled back to <b>destination</b> as seen from <b>this machine</b> (e.g. expose your local dev server on port 8080 to the server).",
+  socks:  "A SOCKS5 proxy on <b>localhost:LISTEN</b>. Point a browser/app at it and all its traffic goes out through the SSH host — destination not needed.",
+};
+
+async function loadTunnels() {
+  const hsel = $("#tun-host");
+  hsel.innerHTML = STATE.hosts.map(h => `<option value="${h.id}">${esc(h.label)}</option>`).join("");
+  let list;
+  try { list = await invoke("tunnels_list"); } catch (e) { return; }
+  const el = $("#tunlist");
+  el.innerHTML = list.length ? "" : '<p class="muted">No tunnels yet.</p>';
+  for (const t of list) {
+    const item = document.createElement("div");
+    item.className = "key-item";
+    const desc = t.kind === "socks"
+      ? `SOCKS5 localhost:${t.listen_port} via ${esc(t.host_label)}`
+      : t.kind === "remote"
+        ? `${esc(t.host_label)}:${t.listen_port} → this machine ${esc(t.dest_host)}:${t.dest_port}`
+        : `localhost:${t.listen_port} → ${esc(t.dest_host)}:${t.dest_port} via ${esc(t.host_label)}`;
+    item.innerHTML =
+      `<span class="tdot ${t.active ? "on" : ""}"></span>` +
+      `<span class="kname">${esc(t.name)}</span><span class="kind-chip">${t.kind}</span>` +
+      `<span class="muted">${desc}</span>` +
+      `<button class="btn-${t.active ? "danger" : "primary"} small tgl">${t.active ? "Stop" : "Start"}</button>` +
+      `<button class="btn-ghost small del">Delete</button>`;
+    item.querySelector(".tgl").onclick = async () => {
+      try {
+        if (t.active) await invoke("tunnel_stop", { id: t.id });
+        else await invoke("tunnel_start", { id: t.id });
+        loadTunnels();
+      } catch (e) { alert(e); }
+    };
+    item.querySelector(".del").onclick = async () => {
+      if (!confirm(`Delete tunnel "${t.name}"?`)) return;
+      await invoke("tunnel_delete", { id: t.id });
+      loadTunnels();
+    };
+    el.appendChild(item);
+  }
+}
+listen("tunnels-changed", () => { if ($("#view-tunnels").classList.contains("active")) loadTunnels(); });
+
+function tunKindChanged() {
+  const k = $("#tun-kind").value;
+  $("#tun-dest-wrap").classList.toggle("hidden", k === "socks");
+  $("#tun-hint").innerHTML = TUN_HINT[k];
+  $("#tun-lport").placeholder = k === "socks" ? "1080" : k === "remote" ? "8080" : "15432";
+}
+$("#tun-kind").onchange = tunKindChanged;
+tunKindChanged();
+
+$("#tun-add").onclick = async () => {
+  const kind = $("#tun-kind").value;
+  const args = {
+    hostId: parseInt($("#tun-host").value),
+    name: $("#tun-name").value.trim(),
+    kind,
+    listenPort: parseInt($("#tun-lport").value),
+    destHost: kind === "socks" ? "" : ($("#tun-dhost").value.trim() || "localhost"),
+    destPort: kind === "socks" ? 0 : parseInt($("#tun-dport").value),
+  };
+  if (!args.hostId || !args.listenPort || (kind !== "socks" && !args.destPort)) {
+    alert("SSH host, listen port" + (kind !== "socks" ? " and destination port" : "") + " are required");
+    return;
+  }
+  if (!args.name) args.name = `${kind}-${args.listenPort}`;
+  try {
+    await invoke("tunnel_save", args);
+    $("#tun-name").value = $("#tun-lport").value = $("#tun-dport").value = "";
+    loadTunnels();
+  } catch (e) { alert(e); }
+};
 
 /* show/hide password inputs (create/edit forms only — saved secrets never come back) */
 document.addEventListener("click", e => {

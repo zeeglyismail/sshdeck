@@ -23,7 +23,17 @@ pub struct ConnectSpec {
     pub key_pass: Option<String>,
 }
 
-pub struct Client;
+/// Handler. `forwarded` receives channels the SERVER opens toward us — that is
+/// remote (-R) port forwarding traffic; None for connections that don't use it.
+pub struct Client {
+    pub forwarded: Option<mpsc::UnboundedSender<russh::Channel<client::Msg>>>,
+}
+
+impl Default for Client {
+    fn default() -> Self {
+        Client { forwarded: None }
+    }
+}
 
 impl client::Handler for Client {
     type Error = russh::Error;
@@ -33,6 +43,21 @@ impl client::Handler for Client {
         _server_public_key: &russh::keys::PublicKey,
     ) -> Result<bool, Self::Error> {
         Ok(true) // LAN tool: trust-on-use, host key pinning is on the roadmap
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _connected_address: &str,
+        _connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        if let Some(tx) = &self.forwarded {
+            let _ = tx.send(channel);
+        }
+        Ok(())
     }
 }
 
@@ -55,11 +80,17 @@ pub async fn pooled(pool: &SshPool, host_id: i64, spec: ConnectSpec) -> Result<A
 }
 
 async fn connect(spec: &ConnectSpec) -> Result<Handle<Client>, String> {
+    connect_with(spec, Client::default()).await
+}
+
+/// Connect + authenticate with a caller-supplied handler (used by remote tunnels
+/// that need the forwarded-channel callback).
+pub async fn connect_with(spec: &ConnectSpec, handler: Client) -> Result<Handle<Client>, String> {
     let config = Arc::new(client::Config {
         keepalive_interval: Some(std::time::Duration::from_secs(20)),
         ..Default::default()
     });
-    let mut handle = client::connect(config, (spec.hostname.as_str(), spec.port), Client)
+    let mut handle = client::connect(config, (spec.hostname.as_str(), spec.port), handler)
         .await
         .map_err(|e| format!("connect failed: {e}"))?;
 

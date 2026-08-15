@@ -111,9 +111,14 @@ If `cargo tauri` is missing: `cargo install tauri-cli --locked`.
 
 M1 ✓ shell/local PTY · M2 ✓ SSH/hosts/monitoring/themes · M3 ✓ SFTP dual pane,
 host↔host transfer, upload/download via native dialogs, nested folders, full
-sidebar parity with the web app (edit ✎, duplicate, rename, drag to folder/root).
-Next: M4 tunnels (local + remote + SOCKS), then M5 polish (splits w/ local-or-host
-picker + MultiExec, cursor style option, close warnings, reset, backup import).
+sidebar parity with the web app (edit ✎, duplicate, rename, drag to folder/root)
+· M4 ✓ tunnels: local (-L), remote (-R), SOCKS5 (-D) in `tunnels.rs`, natively
+bound on 127.0.0.1; local + socks share the pooled connection, remote opens a
+dedicated connection whose `Client.forwarded` channel receives server-opened
+channels (Handler::server_channel_open_forwarded_tcpip). Local -L verified
+end-to-end against ls01 (SSH banner through 127.0.0.1:49555).
+Next: M5 polish (splits w/ local-or-host picker + MultiExec, cursor style option,
+close warnings, reset, backup import), then release build + installer.
 
 ## Rules
 

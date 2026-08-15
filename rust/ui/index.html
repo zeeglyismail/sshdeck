@@ -13,6 +13,7 @@
     <nav id="mainnav">
       <button data-view="terms" class="nav-btn active">Terminals</button>
       <button data-view="files" class="nav-btn">Files</button>
+      <button data-view="tunnels" class="nav-btn">Tunnels</button>
       <button data-view="settings" class="nav-btn">Settings</button>
     </nav>
     <div class="top-right"></div>
@@ -61,6 +62,30 @@
         <div id="transfers" class="hidden">
           <div class="tr-head">Transfers <button id="tr-clear" class="btn-ghost small">clear finished</button></div>
           <div id="tr-list"></div>
+        </div>
+      </section>
+
+      <section id="view-tunnels" class="view">
+        <div class="page">
+          <h2>Port forwarding</h2>
+          <p class="muted">Tunnels ride your saved hosts' SSH connections and bind <b>on this machine</b> — no port ranges to configure.</p>
+          <div id="tunlist"></div>
+          <h3>Add tunnel</h3>
+          <div class="grid2">
+            <label>Name<input id="tun-name" placeholder="pg via jumphost"></label>
+            <label>SSH host<select id="tun-host"></select></label>
+            <label>Type<select id="tun-kind">
+              <option value="local">Local  —  localhost:PORT → host → destination</option>
+              <option value="remote">Remote  —  server:PORT → back to a port on this machine</option>
+              <option value="socks">SOCKS5 proxy  —  localhost:PORT, browse via the host</option>
+            </select></label>
+            <label id="tun-lport-wrap">Listen port<input id="tun-lport" type="number" placeholder="15432"></label>
+            <label id="tun-dest-wrap">Destination<div class="row-gap">
+              <input id="tun-dhost" value="localhost" spellcheck="false" style="flex:2">
+              <input id="tun-dport" type="number" placeholder="5432" style="flex:1"></div></label>
+          </div>
+          <p class="muted" id="tun-hint"></p>
+          <div><button id="tun-add" class="btn-primary">Save tunnel</button></div>
         </div>
       </section>
 

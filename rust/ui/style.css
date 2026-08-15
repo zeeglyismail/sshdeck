@@ -169,6 +169,12 @@ body.resizing * { transition: none !important; }
 .modal-actions { display: flex; gap: 8px; margin-top: 18px; align-items: center; }
 .modal-actions .spacer { flex: 1; }
 
+.tdot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; display: inline-block; }
+.tdot.on { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.kind-chip { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--accent2); border: 1px solid var(--border); border-radius: 3px; padding: 1px 6px; }
+#tunlist .key-item .tgl { margin-left: auto; }
+#tunlist .key-item .del { margin-left: 0; }
+
 #choice-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 60; animation: fadeIn .14s ease; }
 .modal.choice { width: 480px; }
 .modal.choice p { line-height: 1.6; color: var(--fg); }
