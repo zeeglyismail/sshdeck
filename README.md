@@ -1,55 +1,90 @@
 # SSHDeck
 
-**Self-hosted web SSH client** — the MobaXterm / Termius experience in your browser, running from a single Docker container. Save unlimited sessions, open terminals in tabs, browse files over SFTP, drag files **directly between two servers**, and watch live host metrics — all without installing anything on your machines.
+**A MobaXterm/Termius-style SSH client you own** — split terminals, dual-pane SFTP with **server-to-server transfers**, port forwarding, and live host monitoring.
 
-> Built for homelab / internal-network use. It stores credentials to your fleet — run it behind a VPN, never on the public internet.
+Two editions from one repo:
 
-![SSHDeck — terminal with live monitoring bar](docs/screenshot-terminal.png)
+| | **Desktop** (Windows) | **Web** (Docker) |
+|---|---|---|
+| Install | [**Download SSHDeck v1.0.0**](https://github.com/zeeglyismail/sshdeck/releases/latest) — 2.2 MB installer, no admin needed | `docker compose up -d` → http://localhost:8022 |
+| Stack | Rust + Tauri 2 (5.7 MB exe, ~29 MB RAM, 0.3 s cold start) | FastAPI + asyncssh + SQLite |
+| Best for | Daily driver on your machine — native window, local terminals, splits | Team/self-hosted, reachable from any browser, multi-user |
+
+![SSHDeck desktop — split SSH sessions with MultiExec and the live monitoring bar](docs/screenshot-desktop.png)
+
+> Built for homelab / internal-network use. It stores credentials to your fleet — keep the web edition behind a VPN, never on the public internet.
+
+---
 
 ## Features
 
-**Terminal**
-- Full xterm.js terminal with tabs, 256-color, tmux/vim/nano friendly
-- **Press Enter to reconnect** a dropped session in place — same tab, scrollback intact (perfect for host reboots: keep hitting Enter until the box is back)
-- VS Code-style font zoom (Ctrl+scroll / Ctrl+±), thin bar cursor
-- Moba-style copy/paste: select-to-copy, middle-click paste, Ctrl+Shift+C/V, browser right-click menu untouched
-- Client-side output highlighting (IPs, MACs, UP/DOWN keywords) — auto-disabled inside full-screen apps, toggleable in Settings
+Everything below is in **both** editions unless marked.
 
-**Monitoring bar** (agentless — read over the same SSH connection, 0.5s refresh)
-- CPU with 60-second sparkline graph
-- RAM / DISK usage meters
-- Network up/down rates with 60-second graph
+**Terminal**
+- xterm.js terminals with tabs, 256-color, tmux/vim/nano friendly
+- **Split panes** — split right/down, nestable; each split can be a **local shell (PowerShell/cmd/WSL) or any saved host** *(desktop)*
+- **MultiExec** — type once, every split in the tab receives it; per-split opt-out *(desktop)*
+- **Press Enter to reconnect** a dropped session in place — same tab, scrollback intact (perfect for reboots)
+- Drag tabs to reorder with a live re-flow preview; middle-click closes a tab
+- Moba-style copy/paste: select-to-copy, middle-click paste, Ctrl+Shift+C/V
+- Font zoom (Ctrl+scroll / Ctrl+±), configurable scrollback (default 50 000 lines)
+- Output highlighting — IPs, MACs, UP/DOWN keywords — auto-off inside full-screen apps, toggleable
+- Cursor style: bar / block / underline × phase (VS Code expand) / blink / steady *(desktop)*
+- Local terminal tabs *(desktop)*
+
+**Monitoring bar** — agentless, over the same SSH connection
+- CPU with 60-second sparkline, RAM and disk meters
+- Network up/down rates with a 60-second graph
 - Uptime, and logged-in users with per-user session counts (`ismail×2 devops`) — hover for the full `who` detail
 
 **Sessions**
-- Unlimited saved hosts, organized in **nested folders** (any depth), with instant filter and natural sorting (`base, 1, 2, … 10` — never `1, 10, 2`)
-- Drag & drop hosts and folders into folders; drag tabs to reorder (animated live preview); right-click context menus with host duplicate and sub-folder creation
-- **Identities**: save a username+password pair once, pin it to any number of hosts; rotate the password in one place
-- SSH key auth — private keys stored encrypted, never sent to the browser
+- Unlimited saved hosts in **nested folders** (any depth), instant filter, natural sorting (`base, 1, 2, … 10` — never `1, 10, 2`)
+- Drag hosts and folders between folders; right-click for rename / sub-folder / duplicate host
+- **Identities** — save a username+password once, pin it to any number of hosts, rotate in one place
+- SSH key auth — private keys stored encrypted, never sent to the UI
+- Deleting an identity/key never blocks: hosts fall back to password auth; deleting a folder asks whether to keep or delete the hosts inside
 - Resizable sidebar, searchable host picker in the file manager
-- MobaXterm `.mobaconf` import (bookmarks + folders) and export
-- Full native backup/restore: one JSON with folders, hosts, identities and keys (credentials included) — restores on any SSHDeck instance
 
 **Files (SFTP)**
 - Dual-pane file manager, each pane on any host
-- **Host-to-host transfer**: drag files/directories from one pane to the other — streamed server-side, never touches your PC
-- Multi-select (Ctrl/Shift+click), upload via drag from desktop, download, mkdir, rename, chmod, recursive delete
-- Live transfer progress list
-- Searchable host picker per pane; ⏻ releases the pane's SFTP session without touching open terminals
+- **Host-to-host transfer** — drag files/directories between panes; streamed by the app, never through your PC
+- Multi-select (Ctrl/Shift+click), upload, download, mkdir, rename, chmod, recursive delete, live progress
+- Release a pane's file session without touching open terminals
 
 **Tunnels (port forwarding)**
-- Local forwards through any saved host: `<sshdeck-server>:PORT` → SSH host → destination
-- Saved tunnel definitions with one-click start/stop and live status
-- Container publishes ports 15000–15020 for tunnels by default (adjust in `docker-compose.yml`)
-- (X11 forwarding is intentionally out of scope — a browser has no X server to draw on; that's desktop-app territory)
+- **Local (-L)** — reach a service on/behind a server from your machine
+- **Remote (-R)** and **SOCKS5 (-D)** proxy *(desktop; web edition has local forwards)*
+- Saved definitions, one-click start/stop, live status
+- Desktop binds on your own machine — no container port ranges to configure
 
-**Platform**
-- Multi-user: sign up / sign in, every user has their own sessions, keys, identities
-- Theme JSON: paste a JSON in Settings to restyle the whole UI + terminal; share the file with anyone
-- All state in `./data` (SQLite + encryption key) — copy the folder to move the app, delete it for a fresh start
-- Structured logs to stdout — `docker logs sshdeck` shows connects, transfers, failures
+**Portability & theming**
+- MobaXterm `.mobaconf` **import and export** (bookmarks + nested folders)
+- Full backup **export/import**: one JSON with folders, hosts, identities and keys — moves your whole setup between editions/machines
+- 5 built-in themes (`zeegly`, Dracula, Nord, One Dark, Gruvbox) + paste-your-own theme JSON *(desktop)*; theme JSON *(web)*
+- Factory reset with type-to-confirm *(desktop)*; close-warnings for live sessions *(desktop)*
+- Multi-user sign up / sign in *(web)*
 
-## Quick start
+---
+
+## Desktop edition (Windows)
+
+**[Download the installer →](https://github.com/zeeglyismail/sshdeck/releases/latest)** (`SSHDeck_1.0.0_x64-setup.exe`, 2.2 MB)
+
+Per-user install, no admin prompt, Start-menu + desktop shortcuts, uninstaller included.
+Windows SmartScreen will warn on first run because the binary isn't code-signed — *More info → Run anyway*.
+
+Data lives in `%APPDATA%\cloud.onnorokom.sshdeck` (SQLite + AES-GCM key). Coming from the web edition? Settings → **Restore backup** with a `sshdeck-backup.json` export.
+
+### Build from source
+
+```bash
+cd rust/src-tauri
+cargo build --release     # exe       → target/release/sshdeck-desktop.exe
+cargo tauri build         # installer → target/release/bundle/nsis/
+```
+Needs Rust (MSVC toolchain), VS Build Tools C++ workload, and `cargo install tauri-cli --locked`.
+
+## Web edition (Docker)
 
 ```bash
 git clone https://github.com/zeeglyismail/sshdeck.git && cd sshdeck
@@ -58,67 +93,62 @@ docker compose up -d --build
 
 Open http://localhost:8022, sign up, add hosts (or Settings → import your `.mobaconf`).
 
+---
+
 ## Architecture
 
-Modular monolith — one container, one shared SSH connection pool, one feature per module:
+Two frontends, the same ideas, no shared runtime:
 
 ```
-app/
-├── main.py            # FastAPI app assembly, session middleware, error handler
-├── db.py              # SQLite (+ automatic schema migrations)
-├── crypto.py          # Fernet encryption for stored secrets, key in /data
-├── auth.py            # bcrypt password hashing, session dependency
-├── ssh_manager.py     # pooled asyncssh connections: one per (user, host),
-│                      #   shared by terminal, SFTP, stats and transfers
-├── ws.py              # WebSockets: /ws/term (PTY) and /ws/stats (metrics)
-├── mobaconf.py        # MobaXterm bookmark format parser/generator
-└── routers/           # one REST module per feature
-    ├── account.py     # signup / login / session
-    ├── inventory.py   # folders + hosts
-    ├── credentials.py # identities + SSH keys
-    ├── sftp.py        # file manager operations
-    ├── transfers.py   # server-side host-to-host copy
-    └── portability.py # mobaconf import/export
-static/                # no-build frontend: vanilla JS + xterm.js (vendored)
+app/                      # web edition — FastAPI (modular monolith)
+├── ssh_manager.py        #   pooled asyncssh connections: one per (user, host),
+│                         #   shared by terminal, SFTP, stats and transfers
+├── ws.py                 #   WebSockets: /ws/term (PTY) + /ws/stats (metrics)
+├── db.py crypto.py auth.py mobaconf.py
+└── routers/              #   one REST module per feature
+    account · inventory · credentials · sftp · transfers · tunnels · portability
+static/                   # no-build frontend: vanilla JS + xterm.js (vendored)
+
+rust/                     # desktop edition — Tauri 2
+├── src-tauri/src/
+│   ├── ssh.rs            #   russh connections + pool; password → keyboard-interactive auth
+│   ├── sftp.rs           #   russh-sftp browse/transfer with progress events
+│   ├── tunnels.rs        #   local (-L), remote (-R), SOCKS5 (-D)
+│   ├── export.rs         #   backup JSON + mobaconf import/export
+│   └── db.rs crypto.rs portability.rs main.rs
+└── ui/                   # same vanilla JS + xterm.js approach, embedded in the exe
 ```
 
-Why not microservices? The SSH connection pool is the heart of the app — terminal, SFTP, stats and transfers all multiplex channels over the *same* connection per host. Splitting features into separate processes would force one SSH connection per service (or an RPC layer around the pool) for zero gain at this scale. The router-per-feature layout gives the same isolation for development: add a feature = add a module.
+**Why not microservices?** The SSH connection pool is the heart of the app — terminal, SFTP, stats and transfers all multiplex channels over the *same* connection per host. Splitting them into services would force one connection per service for zero gain. Feature-per-module gives the same isolation for development.
 
-### Monitoring internals
+**Monitoring internals** — no agents: one command per tick reads `/proc/stat`, `/proc/meminfo`, `df`, `/proc/net/dev`, `/proc/uptime`, `who`; deltas and rates are computed app-side.
 
-No agents. Every stats tick runs one command over a channel of the pooled connection reading `/proc/stat`, `/proc/meminfo`, `df`, `/proc/net/dev`, `/proc/uptime`, `who` — rates and deltas are computed server-side and pushed over the stats WebSocket.
-
-### Host-to-host transfers
-
-The server opens SFTP sessions to both hosts and pipes read→write in 1 MB chunks. Progress is tracked in memory and polled by the UI. Your browser only carries the *instruction*, not the bytes.
+**Host-to-host transfers** — the app opens SFTP sessions to both hosts and pipes read→write in chunks. The UI only carries the *instruction*, not the bytes.
 
 ## Data & backup
 
-Everything lives in `./data`:
+| Edition | Location | Files |
+|---|---|---|
+| Web | `./data` next to `docker-compose.yml` | `sshdeck.db` + `secret.key` (Fernet) |
+| Desktop | `%APPDATA%\cloud.onnorokom.sshdeck` | `sshdeck.db` + `secret.key` (AES-256-GCM) |
 
-| File | Purpose |
-|---|---|
-| `sshdeck.db` | SQLite — users, folders, hosts, identities, keys (secrets encrypted) |
-| `secret.key` | Fernet key encrypting all stored secrets |
-
-Back up both **together** — the DB is unreadable without the key. Move the app by copying the folder. Fresh start: `docker compose down`, delete `./data`, `docker compose up -d`.
+Back up both files **together** — the DB is unreadable without the key. For moving between machines or editions, prefer Settings → **Export backup (.json)**.
 
 ## Security notes
 
-- Internal networks / VPN only. Put HTTPS (reverse proxy) in front if it leaves localhost.
-- Stored passwords/keys are encrypted at rest (Fernet, key on disk beside the DB — disk access = game over, so protect the host).
-- Session cookies are signed; passwords hashed with bcrypt.
-- SSH host keys are currently **not verified** (`known_hosts=None`) — acceptable on a LAN, on the roadmap to make strict.
+- Internal networks / VPN only. Put HTTPS in front of the web edition if it leaves localhost.
+- Stored secrets are encrypted at rest; the key sits beside the DB, so protect the host.
+- Web edition: signed session cookies, bcrypt password hashing.
+- SSH host keys are **not yet verified** — acceptable on a LAN, TOFU verification is on the roadmap.
 
-## Roadmap / ideas
+## Roadmap
 
-- Theme gallery + more built-in themes
-- Manual sort order for sessions
 - SSH host key verification (TOFU)
+- Linux/macOS desktop builds via CI matrix
 - Transfer acceleration for very large files (streamed exec instead of SFTP)
-- Remote / dynamic (SOCKS) forwarding on top of the local tunnels
-- Native desktop binaries (PyInstaller, Windows first) alongside Docker
-- TOTP two-factor login
+- Manual sort order for sessions, more built-in themes
+- X11 forwarding on desktop via a user-installed X server (VcXsrv)
+- TOTP two-factor login (web)
 
 ## License
 
