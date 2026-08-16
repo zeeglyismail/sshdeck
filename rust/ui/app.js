@@ -395,17 +395,83 @@ $("#filter").addEventListener("input", renderTree);
 
 /* ---------- terminals ---------- */
 
+/* ---------- output highlighting (Moba-style, client-side) — parity with web ---------- */
+let HL_ON = localStorage.getItem("deck.hl") !== "0";
+const HL_RE = new RegExp(
+  "(?<ip4>\\b(?:\\d{1,3}\\.){3}\\d{1,3}(?:\\/\\d{1,2})?\\b)" +
+  "|(?<mac>\\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\\b)" +
+  "|(?<ip6>\\b(?:[0-9A-Fa-f]{1,4}:){4,7}[0-9A-Fa-f]{1,4}(?:\\/\\d{1,3})?\\b" +
+    "|(?<![0-9A-Za-f:])[0-9A-Fa-f]{0,4}::[0-9A-Fa-f:]{1,32}(?:\\/\\d{1,3})?)" +
+  "|(?<good>\\b(?:UP|RUNNING|LISTEN|ESTABLISHED|active|running|success|enabled|OK)\\b)" +
+  "|(?<bad>\\b(?:DOWN|UNKNOWN|FAILED|ERROR|failed|error|inactive|dead|refused|denied)\\b)",
+  "g");
+function hlApply(s) {
+  return s.replace(HL_RE, (...args) => {
+    const g = args[args.length - 1];
+    const m = args[0];
+    const color = g.ip4 ? "36" : g.mac ? "33" : g.ip6 ? "35" : g.good ? "32" : "31";
+    return `\x1b[${color}m${m}\x1b[39m`;
+  });
+}
+
+/* ---------- tab drag reorder with live FLIP preview — parity with web ---------- */
+function flipMove(container, mutate) {
+  const before = new Map([...container.children].map(el => [el, el.getBoundingClientRect().left]));
+  mutate();
+  for (const el of container.children) {
+    const old = before.get(el);
+    if (old === undefined) continue;
+    const dx = old - el.getBoundingClientRect().left;
+    if (!dx) continue;
+    el.style.transition = "none";
+    el.style.transform = `translateX(${dx}px)`;
+    requestAnimationFrame(() => {
+      el.style.transition = "transform .18s cubic-bezier(.2,.8,.3,1)";
+      el.style.transform = "";
+    });
+  }
+}
+let dragTabEl = null;
+{
+  const bar = $("#tabbar");
+  bar.addEventListener("dragover", ev => {
+    if (!dragTabEl) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "move";
+    const target = [...bar.children].filter(c => c !== dragTabEl)
+      .find(c => ev.clientX < c.getBoundingClientRect().left + c.offsetWidth / 2) || null;
+    const already = target ? dragTabEl.nextSibling === target : bar.lastElementChild === dragTabEl;
+    if (already) return;
+    flipMove(bar, () => bar.insertBefore(dragTabEl, target));
+  });
+  bar.addEventListener("drop", ev => ev.preventDefault());
+}
+function makeTabDraggable(tabEl) {
+  tabEl.draggable = true;
+  tabEl.addEventListener("dragstart", ev => {
+    dragTabEl = tabEl;
+    ev.dataTransfer.setData("application/x-deck-tab", "1");
+    ev.dataTransfer.effectAllowed = "move";
+    setTimeout(() => tabEl.classList.add("dragging"), 0);
+  });
+  tabEl.addEventListener("dragend", () => {
+    tabEl.classList.remove("dragging");
+    dragTabEl = null;
+  });
+}
+
 /* ================= terminals: tabs → split instances (local or SSH) ================= */
 
 const PREFS = {
   cursorStyle: localStorage.getItem("deck.cursorStyle") || "bar",       // bar | block | underline
-  cursorMotion: localStorage.getItem("deck.cursorMotion") || "phase",   // phase | blink | steady
+  cursorMotion: localStorage.getItem("deck.cursorMotion") || "phase",
+  scrollback: parseInt(localStorage.getItem("deck.scrollback")) || 50000,   // phase | blink | steady
   warnCloseTab: localStorage.getItem("deck.warnCloseTab") !== "0",
   warnQuit: localStorage.getItem("deck.warnQuit") !== "0",
 };
 function savePref(k, v) {
   PREFS[k] = v;
-  localStorage.setItem("deck." + k, typeof v === "boolean" ? (v ? "1" : "0") : v);
+  localStorage.setItem("deck." + k, typeof v === "boolean" ? (v ? "1" : "0") : String(v));
 }
 function applyCursorPrefs() {
   document.body.dataset.cursorMotion = PREFS.cursorMotion;
@@ -432,7 +498,7 @@ function createInst(tab, source) {
   const term = new Terminal({
     fontFamily: '"Cascadia Code", Consolas, monospace', fontSize: FONT_SIZE,
     theme: ACTIVE_THEME.terminal, cursorStyle: PREFS.cursorStyle,
-    cursorBlink: PREFS.cursorMotion === "blink", scrollback: 50000,
+    cursorBlink: PREFS.cursorMotion === "blink", scrollback: PREFS.scrollback,
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
@@ -450,6 +516,26 @@ function createInst(tab, source) {
     const sel = term.getSelection();
     if (sel) navigator.clipboard.writeText(sel).catch(() => {});
   });
+  // Moba-style paste: middle-click and Ctrl+Shift+V; Ctrl+Shift+C copies
+  const pasteClipboard = () => navigator.clipboard.readText()
+    .then(text => { if (text) sendTo(inst, text); }).catch(() => {});
+  term.attachCustomKeyEventHandler(ev => {
+    if (ev.ctrlKey && ev.type === "keydown" && ["=", "+", "-"].includes(ev.key)) {
+      setFontSize(FONT_SIZE + (ev.key === "-" ? -1 : 1));
+      return false;
+    }
+    if (ev.ctrlKey && ev.shiftKey && ev.type === "keydown") {
+      if (ev.code === "KeyC") {
+        const sel = term.getSelection();
+        if (sel) navigator.clipboard.writeText(sel).catch(() => {});
+        return false;
+      }
+      if (ev.code === "KeyV") { pasteClipboard(); return false; }
+    }
+    return true;
+  });
+  el.addEventListener("mousedown", ev => { if (ev.button === 1) ev.preventDefault(); });
+  el.addEventListener("auxclick", ev => { if (ev.button === 1) { ev.preventDefault(); pasteClipboard(); } });
   wrapEl.addEventListener("mousedown", () => focusInst(tab, inst));
 
   inst.sendResize = () => {
@@ -492,7 +578,13 @@ function sendTo(inst, d) {
 
 async function connectInst(inst) {
   const t = inst.term;
-  inst.unsubs.push(await listen(`pty-out-${inst.id}`, ev => t.write(new Uint8Array(ev.payload))));
+  const dec = new TextDecoder();
+  inst.unsubs.push(await listen(`pty-out-${inst.id}`, ev => {
+    let str = dec.decode(new Uint8Array(ev.payload), { stream: true });
+    // highlight only on the normal buffer — nano/vim/htop (alt screen) untouched
+    if (HL_ON && t.buffer.active.type === "normal") str = hlApply(str);
+    t.write(str);
+  }));
   if (inst.source.kind === "local") {
     inst.unsubs.push(await listen(`pty-exit-${inst.id}`, () => t.write("\r\n\x1b[1;33m— process exited —\x1b[0m\r\n")));
     await invoke("pty_spawn", { id: inst.id, shell: null });
@@ -561,6 +653,7 @@ function makeTab(title) {
   };
   tabEl.addEventListener("mousedown", e => { if (e.button === 1) e.preventDefault(); });
   tabEl.addEventListener("auxclick", e => { if (e.button === 1) { e.preventDefault(); closeTab(tab); } });
+  makeTabDraggable(tabEl);
   return tab;
 }
 
@@ -1058,6 +1151,7 @@ function buildPane(paneEl, i) {
       <datalist id="hostlist${i}"></datalist>
       <input class="path" value="." spellcheck="false" title="path — press Enter">
       <button class="btn-ghost small go" title="Go / refresh">⟳</button>
+      <button class="btn-ghost small disc" title="Release the file session for this host (terminals stay connected)">⏻</button>
     </div>
     <div class="fp-tools">
       <button class="up">⬆ up</button>
@@ -1139,6 +1233,12 @@ function buildPane(paneEl, i) {
 
   pathInput.addEventListener("keydown", e => { if (e.key === "Enter") load(pathInput.value); });
   paneEl.querySelector(".go").onclick = () => load(pathInput.value);
+  paneEl.querySelector(".disc").onclick = async () => {
+    if (!P.hostId) return;
+    try { await invoke("pool_release", { hostId: P.hostId }); } catch (e) {}
+    sel.value = ""; P.hostId = null; P.entries = []; P.selIdx = new Set();
+    listEl.innerHTML = '<div class="fp-empty">File session released. Terminals untouched. Select a host to browse.</div>';
+  };
   paneEl.querySelector(".up").onclick = () => load(parentPath(P.path));
 
   paneEl.querySelector(".upload").onclick = async () => {
@@ -1387,6 +1487,58 @@ $("#deck-import").onclick = async () => {
       `✓ ${r.hosts} hosts, ${r.folders} folders, ${r.identities} identities, ${r.keys} keys imported (${r.skipped} duplicate hosts skipped)`;
     loadState();
   } catch (e) { $("#deck-result").textContent = "✗ " + e; }
+};
+
+$("#deck-export").onclick = async () => {
+  const path = await window.__TAURI__.dialog.save({
+    title: "Save full backup", defaultPath: "sshdeck-backup.json",
+    filters: [{ name: "SSHDeck backup", extensions: ["json"] }],
+  });
+  if (!path) return;
+  try {
+    const n = await invoke("export_backup", { path });
+    $("#deck-result").textContent = `✓ exported ${n} hosts → ${path}`;
+  } catch (e) { $("#deck-result").textContent = "✗ " + e; }
+};
+
+$("#moba-export").onclick = async () => {
+  const path = await window.__TAURI__.dialog.save({
+    title: "Export MobaXterm bookmarks", defaultPath: "sshdeck-export.mobaconf",
+    filters: [{ name: "MobaXterm config", extensions: ["mobaconf"] }],
+  });
+  if (!path) return;
+  try {
+    const n = await invoke("export_mobaconf", { path });
+    $("#moba-result").textContent = `✓ exported ${n} sessions → ${path}`;
+  } catch (e) { $("#moba-result").textContent = "✗ " + e; }
+};
+
+$("#moba-import").onclick = async () => {
+  const path = await window.__TAURI__.dialog.open({
+    multiple: false, title: "Select MobaXterm .mobaconf",
+    filters: [{ name: "MobaXterm config", extensions: ["mobaconf", "ini", "txt"] }],
+  });
+  if (!path) return;
+  $("#moba-result").textContent = "importing…";
+  try {
+    const r = await invoke("import_mobaconf", { path });
+    $("#moba-result").textContent = `✓ ${r.imported} sessions imported, ${r.skipped} duplicates skipped`;
+    loadState();
+  } catch (e) { $("#moba-result").textContent = "✗ " + e; }
+};
+
+/* terminal prefs: highlighting + scrollback */
+$("#hl-toggle").checked = HL_ON;
+$("#hl-toggle").onchange = e => {
+  HL_ON = e.target.checked;
+  localStorage.setItem("deck.hl", HL_ON ? "1" : "0");
+};
+$("#sb-lines").value = PREFS.scrollback;
+$("#sb-lines").onchange = e => {
+  const v = Math.min(200000, Math.max(1000, parseInt(e.target.value) || 50000));
+  e.target.value = v;
+  savePref("scrollback", v);
+  for (const tab of TABS.values()) for (const i of tab.insts) i.term.options.scrollback = v;
 };
 
 /* show/hide password inputs (create/edit forms only — saved secrets never come back) */

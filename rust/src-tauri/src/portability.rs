@@ -58,7 +58,7 @@ pub struct ImportResult {
 }
 
 /// "Parent/Child" (or "Parent\Child") → folder id, creating each level as needed
-fn folder_id_for_path(conn: &rusqlite::Connection, path: &str) -> Option<i64> {
+pub(crate) fn folder_id_for_path(conn: &rusqlite::Connection, path: &str) -> Option<i64> {
     let mut parent: Option<i64> = None;
     let mut any = false;
     for name in path.replace('\\', "/").split('/').filter(|p| !p.is_empty()) {

@@ -60,8 +60,7 @@ everything that differs. Owner's reaction to M1: "feels super smooth".
 - [x] Middle-click closes tabs (parity with web) — M1
 - [x] Close warnings: tab with live session + app quit (toggleable) — M5
 - [x] Factory reset button (wipe data dir, type-to-confirm, relaunch) — M5
-- [~] mobaconf + sshdeck-backup.json import (backup JSON ✓, mobaconf pending) (reuse formats from `app/mobaconf.py`
-      and `app/routers/portability.py`) — M5
+- [x] mobaconf import/export + sshdeck-backup.json import/export (`export.rs`) — M5
 - [ ] X11 forwarding via user-installed VcXsrv — post-M5, optional
 
 ## Milestones
@@ -141,6 +140,15 @@ verified splits/MultiExec/prefs with zero JS errors. Delete the shim afterwards.
 installer, 5.7 MB exe, no admin needed, per-user install).
 Next: GitHub Release + Linux CI matrix, then host-key verification (TOFU),
 mobaconf import in desktop, X11 via VcXsrv (optional).
+
+## Parity discipline (owner asked twice — do not skip)
+
+Before calling a desktop milestone done, DIFF against the web app and port
+anything missing. Quick check:
+`for f in hlApply HL_ON SCROLLBACK pasteClipboard flipMove dragTabEl datalist disc   export/sshdeck export/mobaconf; do grep -c "$f" static/app.js rust/ui/app.js; done`
+Features that were missed once and had to be back-filled: output highlighting,
+scrollback setting, middle-click/Ctrl+Shift paste, tab drag-reorder with FLIP
+preview, SFTP release button, backup/mobaconf EXPORT (import existed).
 
 ## Rules
 

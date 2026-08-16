@@ -66,6 +66,16 @@ impl client::Handler for Client {
 #[derive(Default)]
 pub struct SshPool(pub tokio::sync::Mutex<HashMap<i64, Arc<Handle<Client>>>>);
 
+/// Drop the pooled connection for a host — releases SFTP/transfer sessions only;
+/// terminals keep their own connections (parity with the web app's release button).
+#[tauri::command]
+pub async fn pool_release(pool: tauri::State<'_, SshPool>, host_id: i64) -> Result<(), String> {
+    if let Some(h) = pool.0.lock().await.remove(&host_id) {
+        let _ = h.disconnect(russh::Disconnect::ByApplication, "released", "en").await;
+    }
+    Ok(())
+}
+
 pub async fn pooled(pool: &SshPool, host_id: i64, spec: ConnectSpec) -> Result<Arc<Handle<Client>>, String> {
     let mut map = pool.0.lock().await;
     if let Some(h) = map.get(&host_id) {

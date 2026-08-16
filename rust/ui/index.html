@@ -131,12 +131,28 @@
           <label class="chk"><input type="checkbox" id="pref-warn-tab"> Warn before closing a tab or split with a live SSH session</label>
           <label class="chk"><input type="checkbox" id="pref-warn-quit"> Warn before quitting the app while sessions are connected</label>
 
-          <h3>Import from SSHDeck web (Docker)</h3>
-          <p class="muted">Restore a <code>sshdeck-backup.json</code> exported from the web version: folders (nested), hosts, identities and keys — credentials included.</p>
+          <h3>Terminal</h3>
+          <label class="chk"><input type="checkbox" id="hl-toggle">
+            Output highlighting — colorize IPs, MACs, UP/DOWN keywords (auto-off in nano/vim/htop)</label>
+          <label class="chk">Scrollback lines
+            <input type="number" id="sb-lines" min="1000" max="200000" step="1000" style="width:110px">
+            <span class="muted">history kept per terminal (default 50000)</span></label>
+
+          <h3>Backup &amp; restore</h3>
+          <p class="muted">Full backup: folders (nested), hosts, identities and keys — <b>credentials included in readable form</b>, so it restores here or in the web version. Keep the file safe.</p>
           <div class="row-gap">
-            <button id="deck-import" class="btn-primary small">Choose backup file…</button>
+            <button id="deck-export" class="btn-primary small">Export backup (.json)…</button>
+            <button id="deck-import" class="btn-ghost small">Restore backup…</button>
             <span id="deck-result" class="muted"></span>
           </div>
+
+          <h3>MobaXterm</h3>
+          <div class="row-gap">
+            <button id="moba-import" class="btn-primary small">Import .mobaconf…</button>
+            <button id="moba-export" class="btn-ghost small">Export .mobaconf…</button>
+            <span id="moba-result" class="muted"></span>
+          </div>
+          <p class="muted">Import reads SSH bookmarks and folders (Moba's stored passwords are encrypted by its master password, so set those per host). Export writes a bookmarks-only file — no passwords.</p>
 
           <h3>Theme</h3>
           <div class="row-gap" id="theme-presets"></div>
