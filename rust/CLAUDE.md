@@ -80,11 +80,17 @@ Prereqs (one-time): VS Build Tools C++ workload, rustup (MSVC toolchain),
 WebView2 runtime (preinstalled on Win 10/11), Node (for vendoring xterm).
 
 ```
-cd rust/ui && npm install && npm run vendor
-cd ../src-tauri && cargo tauri dev        # or: cargo tauri build
+cd rust/src-tauri
+cargo build --release          # plain exe  → target/release/sshdeck-desktop.exe
+cargo tauri build              # + installer → target/release/bundle/nsis/SSHDeck_<ver>_x64-setup.exe
 ```
 
 If `cargo tauri` is missing: `cargo install tauri-cli --locked`.
+**Kill any running sshdeck-desktop.exe first** — Windows locks the binary and the
+build fails with "Access is denied (os error 5)".
+Icons in `src-tauri/icons/` (32/128/128@2x png + multi-size ico) are generated,
+not hand-drawn; bundle config lives in `tauri.conf.json` → `bundle` (NSIS,
+installMode currentUser = no admin prompt).
 
 ## Gotchas learned the hard way
 
@@ -131,8 +137,10 @@ web app's `sshdeck-backup.json` v1/v2 incl. nested folder paths.
 Headless test recipe: build a shim page (`_shim_test.html`, stubbed
 `window.__TAURI__`) served on a local port and drive it via the browser tool —
 verified splits/MultiExec/prefs with zero JS errors. Delete the shim afterwards.
-Next: release build + installer (tauri bundle: NSIS/MSI), Linux CI matrix,
-then host-key verification (TOFU) and X11 via VcXsrv (optional).
+· **v1.0.0 shipped**: NSIS installer `SSHDeck_1.0.0_x64-setup.exe` (2.2 MB
+installer, 5.7 MB exe, no admin needed, per-user install).
+Next: GitHub Release + Linux CI matrix, then host-key verification (TOFU),
+mobaconf import in desktop, X11 via VcXsrv (optional).
 
 ## Rules
 

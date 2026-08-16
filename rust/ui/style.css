@@ -151,7 +151,8 @@ body.resizing * { transition: none !important; }
 
 /* settings/tunnels pages fill the window; content stays readable via a wide inner column */
 .page { padding: 24px 32px; width: 100%; max-width: 1400px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
-.page > * { max-width: 100%; }
+.page > * { max-width: 100%; flex: none; }   /* don't let the flex column squash textareas */
+.page textarea { min-height: 90px; resize: vertical; }
 .page textarea, .page input:not([type=checkbox]):not([type=number]), .page select { width: 100%; }
 .page .grid2 { max-width: 1000px; }
 .page .row-gap input { width: auto; flex: 1; }
