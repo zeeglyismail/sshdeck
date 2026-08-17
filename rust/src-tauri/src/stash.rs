@@ -70,6 +70,15 @@ pub fn stash_cleanup(path: String) {
     }
 }
 
+/// Delete `path` **only** if it is one of our spool files. Called by the upload
+/// task once it is finished — the frontend must not delete it itself, because
+/// `sftp_upload` returns as soon as the background transfer is spawned.
+pub fn cleanup_if_spool(path: &str) {
+    if let Ok(p) = guard(path) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
 /// Remove leftovers from previous runs (called at startup).
 pub fn sweep() {
     let _ = std::fs::remove_dir_all(temp_root());

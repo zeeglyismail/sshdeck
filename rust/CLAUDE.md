@@ -99,6 +99,11 @@ installMode currentUser = no admin prompt).
 - **The exe embeds `ui/` at compile time.** Every frontend edit needs
   `cargo build` + relaunch — there is no hard-refresh. (Kill the running exe first
   or the linker can't overwrite it.)
+- **`sftp_upload`/`sftp_download`/`transfer_start` RETURN IMMEDIATELY** — they spawn a
+  detached task and report progress via the `transfers` event. Never delete or
+  mutate their inputs after awaiting the invoke (that caused the os error 2 spool
+  bug: the frontend deleted the temp file while the upload was still opening it).
+  Cleanup belongs at the END of the spawned task.
 - **OS file drops have NO path** when `dragDropEnabled: false`: the webview gets
   `File` objects only. `stash.rs` spools their bytes (base64 chunks from JS) into a
   temp file, then the normal `sftp_upload` runs on that path. Don't 'fix' this by

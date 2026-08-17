@@ -398,6 +398,9 @@ pub async fn sftp_upload(
             Ok(()) => prog.status = "done".into(),
             Err(e) => { prog.status = "error".into(); prog.error = Some(e); }
         }
+        // if this came from an OS drag & drop, delete the temp spool now that the
+        // transfer is finished — the frontend can't, this task is detached
+        crate::stash::cleanup_if_spool(&local_path);
         push_prog(&app2, &list, prog);
     });
     Ok(())

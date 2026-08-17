@@ -1164,7 +1164,8 @@ async function uploadLocalFiles(P, files, reload) {
     } catch (e) {
       row.className = "tr-item error";
       st.textContent = "✗ " + e;
-    } finally {
+      // only on failure — on success the upload task deletes the spool itself
+      // (sftp_upload returns as soon as the background transfer is spawned)
       if (path) invoke("stash_cleanup", { path });
     }
   }
