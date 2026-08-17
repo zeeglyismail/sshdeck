@@ -34,15 +34,17 @@ pub fn stash_begin(name: String) -> Result<String, String> {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "dropped.bin".into());
-    let unique = format!(
-        "{}-{}",
+    // uniqueness goes in a per-drop SUBDIRECTORY, never in the file name — the
+    // upload derives the remote name from this path, so it must stay pristine
+    let dir = root.join(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
-            .unwrap_or(0),
-        base
+            .unwrap_or(0)
+            .to_string(),
     );
-    let path = root.join(unique);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create spool dir: {e}"))?;
+    let path = dir.join(base);
     std::fs::File::create(&path).map_err(|e| format!("cannot create spool file: {e}"))?;
     Ok(path.to_string_lossy().into_owned())
 }
@@ -75,7 +77,13 @@ pub fn stash_cleanup(path: String) {
 /// `sftp_upload` returns as soon as the background transfer is spawned.
 pub fn cleanup_if_spool(path: &str) {
     if let Ok(p) = guard(path) {
-        let _ = std::fs::remove_file(p);
+        let _ = std::fs::remove_file(&p);
+        // each drop gets its own subdirectory — remove it once empty
+        if let Some(dir) = p.parent() {
+            if dir != temp_root() {
+                let _ = std::fs::remove_dir(dir);
+            }
+        }
     }
 }
 

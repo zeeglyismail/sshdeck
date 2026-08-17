@@ -370,7 +370,7 @@ pub async fn sftp_upload(
         let list = app2.state::<Transfers>();
         let mut prog = Prog {
             id,
-            desc: format!("{local_path} â†’ {host_label}:{remote_dir}"),
+            desc: format!("{name} â†’ {host_label}:{remote_dir}"),   // file name, not the temp spool path
             done: 0, total: None, status: "running".into(), error: None,
         };
         push_prog(&app2, &list, prog.clone());
