@@ -1126,6 +1126,51 @@ function parentPath(p) {
 }
 function hostById(id) { return STATE.hosts.find(h => h.id === id); }
 
+/* Files dropped from the OS have no path (dragDropEnabled:false), so stream their
+   bytes into a temp spool file in Rust and upload that with the normal SFTP path. */
+const STASH_CHUNK = 256 * 1024;
+function b64(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 8192)
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  return btoa(s);
+}
+async function uploadLocalFiles(P, files, reload) {
+  const host = hostById(P.hostId);
+  const box = $("#transfers"), list = $("#tr-list");
+  box.classList.remove("hidden");
+  for (const file of files) {
+    const row = document.createElement("div");
+    row.className = "tr-item running";
+    row.innerHTML = `<span class="desc">${esc(file.name)} → ${esc(host.label)}:${esc(P.path)}</span>` +
+      `<span class="meter"><i style="width:0%"></i></span><span class="status">reading…</span>`;
+    list.appendChild(row);
+    const bar = row.querySelector("i"), st = row.querySelector(".status");
+    let path;
+    try {
+      path = await invoke("stash_begin", { name: file.name });
+      for (let off = 0; off < file.size; off += STASH_CHUNK) {
+        const buf = await file.slice(off, off + STASH_CHUNK).arrayBuffer();
+        await invoke("stash_append", { path, chunk: b64(new Uint8Array(buf)) });
+        const pct = Math.min(100, Math.round((off + STASH_CHUNK) / file.size * 100));
+        bar.style.width = pct + "%";
+        st.textContent = fmtBytes(Math.min(file.size, off + STASH_CHUNK)) + " / " + fmtBytes(file.size);
+      }
+      st.textContent = "uploading…";
+      await invoke("sftp_upload", {
+        hostId: P.hostId, localPath: path, remoteDir: P.path, hostLabel: host.label,
+      });
+      row.remove();               // the transfers event takes over from here
+    } catch (e) {
+      row.className = "tr-item error";
+      st.textContent = "✗ " + e;
+    } finally {
+      if (path) invoke("stash_cleanup", { path });
+    }
+  }
+  if (reload) reload();
+}
+
 function renderPaneHostOptions() {
   $$(".fpane").forEach((paneEl, i) => {
     if (!paneEl.dataset.built) buildPane(paneEl, i);
@@ -1312,7 +1357,12 @@ function buildPane(paneEl, i) {
     paneEl.classList.remove("dragover");
     if (!P.hostId) return;
     const raw = ev.dataTransfer.getData("application/x-deck");
-    if (!raw) return;
+    if (!raw) {
+      // files dropped from Explorer/desktop → spool their bytes, then upload
+      const files = [...(ev.dataTransfer.files || [])];
+      if (files.length) await uploadLocalFiles(P, files, load);
+      return;
+    }
     const d = JSON.parse(raw);
     if (d.pane === i && d.hostId === P.hostId) return;
     const src = hostById(d.hostId), dst = hostById(P.hostId);

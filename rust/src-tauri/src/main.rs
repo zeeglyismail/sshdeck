@@ -8,6 +8,7 @@ mod export;
 mod portability;
 mod sftp;
 mod ssh;
+mod stash;
 mod tunnels;
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
@@ -427,6 +428,7 @@ fn main() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             portability::apply_pending_reset(&data_dir);
+            stash::sweep();
             let database = db::open(data_dir.clone());
             tunnels::ensure_schema(&database.0.lock().unwrap());
             app.manage(database);
@@ -446,7 +448,8 @@ fn main() {
             tunnels::tunnel_start, tunnels::tunnel_stop,
             portability::import_backup, portability::factory_reset,
             export::export_backup, export::export_mobaconf, export::import_mobaconf,
-            ssh::pool_release
+            ssh::pool_release,
+            stash::stash_begin, stash::stash_append, stash::stash_cleanup
         ])
         .run(tauri::generate_context!())
         .expect("error while running SSHDeck");

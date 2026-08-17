@@ -99,6 +99,10 @@ installMode currentUser = no admin prompt).
 - **The exe embeds `ui/` at compile time.** Every frontend edit needs
   `cargo build` + relaunch — there is no hard-refresh. (Kill the running exe first
   or the linker can't overwrite it.)
+- **OS file drops have NO path** when `dragDropEnabled: false`: the webview gets
+  `File` objects only. `stash.rs` spools their bytes (base64 chunks from JS) into a
+  temp file, then the normal `sftp_upload` runs on that path. Don't 'fix' this by
+  turning dragDropEnabled on — that kills all in-app HTML5 dragging on Windows.
 - **`dragDropEnabled: false`** in `tauri.conf.json` is required — Tauri's native
   drag-drop interception swallows all HTML5 `dragstart` events on Windows; without
   it no in-app drag & drop (files between panes, hosts to folders) works.
