@@ -2,3 +2,6 @@ src-tauri/target/
 src-tauri/gen/
 node_modules/
 target/
+
+# never commit the throwaway Tauri-shim page used for headless UI tests
+_shim_test.html
