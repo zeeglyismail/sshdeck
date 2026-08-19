@@ -105,6 +105,12 @@ $("#theme-apply").onclick = () => {
 
 /* ---------- helpers ---------- */
 
+/* username to display for a host — identity-based hosts carry theirs on the identity */
+function hostUser(h) {
+  const ident = h.identity_id ? STATE.identities.find(i => i.id === h.identity_id) : null;
+  return (h.auth_type === "identity" && ident ? ident.username : h.username) || "";
+}
+
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -234,8 +240,7 @@ function renderTree() {
     h.hostname.toLowerCase().includes(filter) || h.username.toLowerCase().includes(filter);
 
   const hostRow = (h, depth) => {
-    const ident = h.identity_id ? STATE.identities.find(i => i.id === h.identity_id) : null;
-    const shownUser = h.auth_type === "identity" && ident ? ident.username : h.username;
+    const shownUser = hostUser(h);
     const he = document.createElement("div");
     he.className = "tree-host";
     he.style.paddingLeft = (22 + depth * 14) + "px";
@@ -636,7 +641,7 @@ function makeTab(title) {
   $("#empty").style.display = "none";
   const tabEl = document.createElement("div");
   tabEl.className = "tab";
-  tabEl.innerHTML = `<span class="tlabel">${esc(title)}</span><button class="x" title="close">✕</button>`;
+  tabEl.innerHTML = `<span class="tlabel">${esc(title)}</span><span class="tbadge hidden"></span><button class="x" title="close">✕</button>`;
   $("#tabbar").appendChild(tabEl);
   const pane = document.createElement("div");
   pane.className = "pane";
@@ -702,25 +707,60 @@ function pickSplitSource(dir) {
   return new Promise(resolve => {
     const bg = document.createElement("div");
     bg.id = "choice-bg";
-    const hosts = STATE.hosts.map(h => `<option value="${h.id}">${esc(h.label)} (${esc(h.username)})</option>`).join("");
-    bg.innerHTML = `<div class="modal choice"><h3>Split ${dir === "row" ? "right" : "down"}</h3>
-      <p>Open in the new split:</p>
-      <div class="row-gap" style="margin-bottom:10px">
-        <button class="btn-primary pick-local">Local terminal (PowerShell)</button>
-      </div>
-      <div class="row-gap"><select class="pick-host" style="flex:1">${hosts}</select>
-        <button class="btn-primary pick-ssh">Open host</button></div>
+    bg.innerHTML = `<div class="modal choice picker"><h3>Split ${dir === "row" ? "right" : "down"}</h3>
+      <button class="btn-primary pick-local">Local terminal (PowerShell)</button>
+      <input class="pick-filter" placeholder="🔍 search host…" spellcheck="false" autocomplete="off">
+      <div class="pick-list"></div>
       <div class="modal-actions"><button class="btn-ghost cancel">Cancel</button></div></div>`;
     const done = v => { bg.remove(); resolve(v); };
-    bg.querySelector(".pick-local").onclick = () => done({ kind: "local" });
-    bg.querySelector(".pick-ssh").onclick = () => {
-      const h = STATE.hosts.find(x => x.id === parseInt(bg.querySelector(".pick-host").value));
-      done(h ? { kind: "ssh", host: h } : null);
+    const listEl = bg.querySelector(".pick-list");
+    const filterEl = bg.querySelector(".pick-filter");
+    let shown = [];
+
+    const render = () => {
+      const q = filterEl.value.trim().toLowerCase();
+      shown = STATE.hosts.filter(h => {
+        const u = hostUser(h);
+        return !q || h.label.toLowerCase().includes(q) ||
+          h.hostname.toLowerCase().includes(q) || u.toLowerCase().includes(q);
+      });
+      listEl.innerHTML = shown.length
+        ? shown.map((h, i) => {
+            const u = hostUser(h);
+            return `<button class="pick-row${i === 0 ? " sel" : ""}" data-i="${i}">` +
+              `<span class="pl">${esc(h.label)}</span>` +
+              `<span class="pu">${esc(u ? u + "@" : "")}${esc(h.hostname)}</span></button>`;
+          }).join("")
+        : '<div class="fp-empty">no host matches</div>';
+      listEl.querySelectorAll(".pick-row").forEach(b => {
+        b.onclick = () => done({ kind: "ssh", host: shown[+b.dataset.i] });
+      });
     };
+    const move = d => {
+      const rows = [...listEl.querySelectorAll(".pick-row")];
+      if (!rows.length) return;
+      let i = rows.findIndex(r => r.classList.contains("sel"));
+      i = Math.max(0, Math.min(rows.length - 1, (i < 0 ? 0 : i) + d));
+      rows.forEach(r => r.classList.remove("sel"));
+      rows[i].classList.add("sel");
+      rows[i].scrollIntoView({ block: "nearest" });
+    };
+    filterEl.addEventListener("input", render);
+    filterEl.addEventListener("keydown", ev => {
+      if (ev.key === "ArrowDown") { ev.preventDefault(); move(1); }
+      else if (ev.key === "ArrowUp") { ev.preventDefault(); move(-1); }
+      else if (ev.key === "Enter") {
+        ev.preventDefault();
+        const sel = listEl.querySelector(".pick-row.sel");
+        if (sel) done({ kind: "ssh", host: shown[+sel.dataset.i] });
+      } else if (ev.key === "Escape") done(null);
+    });
+    bg.querySelector(".pick-local").onclick = () => done({ kind: "local" });
     bg.querySelector(".cancel").onclick = () => done(null);
     bg.addEventListener("mousedown", e => { if (e.target === bg) done(null); });
     document.body.appendChild(bg);
-    bg.querySelector(".pick-host").focus();
+    render();
+    filterEl.focus();
   });
 }
 $("#split-h").onclick = async () => { const s = await pickSplitSource("row"); if (s) splitActive(s, "row"); };
@@ -775,7 +815,11 @@ function updateTabChrome(tab) {
   tab.pane.classList.toggle("multi", multi);
   const first = tab.insts[0];
   const base = first.source.kind === "local" ? "PowerShell" : first.host.label;
-  tab.tabEl.querySelector(".tlabel").textContent = multi ? `${base} ⊞${tab.insts.length}` : base;
+  tab.tabEl.querySelector(".tlabel").textContent = base;
+  const badge = tab.tabEl.querySelector(".tbadge");
+  badge.textContent = multi ? String(tab.insts.length) : "";
+  badge.title = multi ? `${tab.insts.length} splits in this tab` : "";
+  badge.classList.toggle("hidden", !multi);
 }
 
 async function closeTab(tab) {
@@ -1179,9 +1223,8 @@ function renderPaneHostOptions() {
     const dl = paneEl.querySelector("datalist");
     P.optMap = {};
     dl.innerHTML = STATE.hosts.map(h => {
-      const ident = h.identity_id ? STATE.identities.find(x => x.id === h.identity_id) : null;
-      const u = h.auth_type === "identity" && ident ? ident.username : h.username;
-      let text = h.label.includes(u) && u ? h.label : `${h.label} (${u})`;
+      const u = hostUser(h);
+      let text = !u || h.label.includes(u) ? h.label : `${h.label} (${u})`;
       if (P.optMap[text]) text += ` #${h.id}`;
       P.optMap[text] = h.id;
       return `<option value="${esc(text)}">`;
@@ -1415,7 +1458,8 @@ const TUN_LABELS = {
 
 async function loadTunnels() {
   const hsel = $("#tun-host");
-  hsel.innerHTML = STATE.hosts.map(h => `<option value="${h.id}">${esc(h.label)}</option>`).join("");
+  hsel.innerHTML = STATE.hosts.map(h => { const u = hostUser(h);
+    return `<option value="${h.id}">${esc(h.label)}${u ? " (" + esc(u) + ")" : ""}</option>`; }).join("");
   let list;
   try { list = await invoke("tunnels_list"); } catch (e) { return; }
   const el = $("#tunlist");
