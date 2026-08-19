@@ -223,10 +223,21 @@ body.resizing * { transition: none !important; }
 @keyframes popIn { from { opacity: 0; transform: scale(.97) translateY(2px); } to { opacity: 1; transform: none; } }
 @keyframes slideIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 /* split layout */
-.split { display: flex; flex: 1; min-width: 0; min-height: 0; gap: 3px; }
+.split { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .split.root { position: absolute; inset: 4px; }
 .tsplit { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .tsplit .term-el { flex: 1; min-height: 0; }
+
+/* draggable divider between split panes */
+.gutter { flex: none; background: var(--bg2); position: relative; z-index: 3; transition: background .12s; }
+.gutter.v { width: 5px; cursor: col-resize; }
+.gutter.h { height: 5px; cursor: row-resize; }
+.gutter::after {           /* fatter invisible hit area so it is easy to grab */
+  content: ""; position: absolute; inset: -3px;
+}
+.gutter:hover, .gutter.dragging { background: var(--accent); }
+body.resizing-split { cursor: inherit; user-select: none; }
+body.resizing-split .xterm { pointer-events: none; }   /* don't select terminal text while dragging */
 .tsplit-bar { display: none; align-items: center; gap: 6px; flex: none; font-family: var(--mono); font-size: 11px; color: var(--muted); background: var(--bg2); padding: 2px 8px; }
 .pane.multi .tsplit-bar { display: flex; }
 .pane.multi .tsplit { border: 1px solid var(--border); }

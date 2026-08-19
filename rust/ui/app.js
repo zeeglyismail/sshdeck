@@ -634,6 +634,77 @@ function instAlive(inst) {
   return inst.source.kind === "local" ? true : !inst.dead;
 }
 
+
+/* ---- resizable splits: a draggable gutter between every pair of panes ---- */
+
+function stripGutters(tab) {
+  tab.root.querySelectorAll(".gutter").forEach(g => g.remove());
+}
+
+function makeGutter(container, tab) {
+  const horiz = container.style.flexDirection === "row";
+  const g = document.createElement("div");
+  g.className = "gutter " + (horiz ? "v" : "h");
+  g.title = "drag to resize · double-click to even out";
+
+  g.addEventListener("mousedown", ev => {
+    ev.preventDefault();
+    const prev = g.previousElementSibling, next = g.nextElementSibling;
+    if (!prev || !next) return;
+    const pr = prev.getBoundingClientRect(), nr = next.getBoundingClientRect();
+    const startPrev = horiz ? pr.width : pr.height;
+    const startNext = horiz ? nr.width : nr.height;
+    const total = startPrev + startNext;
+    const startPos = horiz ? ev.clientX : ev.clientY;
+    const MIN = 80;                       // never let a pane collapse to nothing
+    g.classList.add("dragging");
+    document.body.classList.add("resizing-split");
+
+    let raf = 0;
+    const move = e => {
+      const delta = (horiz ? e.clientX : e.clientY) - startPos;
+      const p = Math.max(MIN, Math.min(total - MIN, startPrev + delta));
+      prev.style.flex = `${p} 1 0`;
+      next.style.flex = `${total - p} 1 0`;
+      if (!raf) raf = requestAnimationFrame(() => {
+        raf = 0;
+        tab.insts.forEach(i => i.sendResize());
+      });
+    };
+    const up = () => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      g.classList.remove("dragging");
+      document.body.classList.remove("resizing-split");
+      tab.insts.forEach(i => i.sendResize());
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
+
+  // double-click: share the space evenly again
+  g.addEventListener("dblclick", () => {
+    [...container.children].forEach(c => {
+      if (!c.classList.contains("gutter")) c.style.flex = "1 1 0";
+    });
+    tab.insts.forEach(i => i.sendResize());
+  });
+  return g;
+}
+
+/// Rebuild every gutter in the tab (call after any structural change).
+function installGutters(tab) {
+  stripGutters(tab);
+  const walk = container => {
+    const kids = [...container.children];
+    kids.forEach((k, i) => {
+      if (i > 0) container.insertBefore(makeGutter(container, tab), k);
+      if (k.classList.contains("split")) walk(k);
+    });
+  };
+  walk(tab.root);
+}
+
 /* ---- tabs ---- */
 
 function makeTab(title) {
@@ -681,6 +752,7 @@ async function splitActive(source, dir) {
   const tab = TABS.get(activeTab);
   if (!tab) { openTab(source); return; }
   const focused = tab.focused || tab.insts[0];
+  stripGutters(tab);                     // structural edit — rebuild them after
   const w = focused.wrapEl;
   const parent = w.parentElement;
   let container;
@@ -689,12 +761,18 @@ async function splitActive(source, dir) {
     container = document.createElement("div");
     container.className = "split";
     container.style.flexDirection = dir;
+    // the wrapper takes over the pane's share, otherwise a previously resized
+    // pane would jump back to an even split when you split it again
+    container.style.flex = w.style.flex || "1 1 0";
     parent.insertBefore(container, w);
     container.appendChild(w);
   }
   const inst = createInst(tab, source);
   container.appendChild(inst.wrapEl);
   tab.insts.push(inst);
+  // a fresh pane starts at an even share of its container
+  [...container.children].forEach(c => { c.style.flex = "1 1 0"; });
+  installGutters(tab);
   updateTabChrome(tab);
   focusInst(tab, inst);
   setTimeout(() => tab.insts.forEach(i => i.sendResize()), 10);
@@ -796,6 +874,7 @@ async function closeInst(tab, inst) {
   }
   disposeInst(inst);
   tab.insts = tab.insts.filter(i => i !== inst);
+  stripGutters(tab);                     // children counts below must exclude them
   const parent = inst.wrapEl.parentElement;
   inst.wrapEl.remove();
   let p = parent;
@@ -805,6 +884,7 @@ async function closeInst(tab, inst) {
     else break;
   }
   if (!tab.insts.length) { removeTab(tab); return; }
+  installGutters(tab);
   if (tab.focused === inst) focusInst(tab, tab.insts[0]);
   updateTabChrome(tab);
   setTimeout(() => tab.insts.forEach(i => i.sendResize()), 10);
