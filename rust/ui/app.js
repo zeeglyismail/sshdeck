@@ -751,7 +751,9 @@ function flashOk(btn, msg) {
   }, 1200);
 }
 
-/* ---- rename a tab (session-only, resets when the tab closes) ---- */
+/* ---- rename a tab (session-only, resets when the tab closes) ----
+   Right-click → Rename only: a dblclick binding also fires the tab's click
+   handler, which re-focuses the terminal and blurs the editor immediately. */
 
 function renameTab(tab) {
   const labelEl = tab.tabEl.querySelector(".tlabel");
@@ -813,11 +815,6 @@ function makeTab(title) {
   };
   tabEl.addEventListener("mousedown", e => { if (e.button === 1) e.preventDefault(); });
   tabEl.addEventListener("auxclick", e => { if (e.button === 1) { e.preventDefault(); closeTab(tab); } });
-  tabEl.addEventListener("dblclick", e => {
-    if (e.target.classList.contains("x")) return;
-    e.preventDefault();
-    renameTab(tab);
-  });
   tabEl.oncontextmenu = e => ctxMenu(e, [
     { label: "Rename tab", fn: () => renameTab(tab) },
     ...(tab.customName ? [{ label: "Reset name", fn: () => { tab.customName = null; updateTabChrome(tab); } }] : []),
