@@ -816,6 +816,13 @@ function makeTab(title) {
   tabEl.addEventListener("mousedown", e => { if (e.button === 1) e.preventDefault(); });
   tabEl.addEventListener("auxclick", e => { if (e.button === 1) { e.preventDefault(); closeTab(tab); } });
   tabEl.oncontextmenu = e => ctxMenu(e, [
+    // opens another session on the same host — no hunting through the sidebar
+    { label: "Duplicate tab", fn: () => {
+        const src = (tab.focused || tab.insts[0]).source;
+        openTab(src.kind === "ssh"
+          ? { kind: "ssh", host: STATE.hosts.find(h => h.id === src.host.id) || src.host }
+          : { kind: "local" });
+      } },
     { label: "Rename tab", fn: () => renameTab(tab) },
     ...(tab.customName ? [{ label: "Reset name", fn: () => { tab.customName = null; updateTabChrome(tab); } }] : []),
     { label: "Copy all output", fn: () => copyTerminal(tab.focused || tab.insts[0], null) },
