@@ -495,6 +495,7 @@ function createInst(tab, source) {
   const title = source.kind === "local" ? "PowerShell" : source.host.label;
   wrapEl.innerHTML =
     `<div class="tsplit-bar"><span class="tname">${esc(title)}</span>` +
+    `<button class="tb-copy" title="copy this pane's output">⧉</button>` +
     `<button class="tb-bc on" title="include this split in MultiExec broadcast">⌨</button>` +
     `<button class="tb-x" title="close split">✕</button></div>` +
     `<div class="term-el"></div>`;
@@ -557,6 +558,7 @@ function createInst(tab, source) {
     } else sendTo(inst, d);
   });
 
+  wrapEl.querySelector(".tb-copy").onclick = e => { e.stopPropagation(); copyTerminal(inst, null); };
   wrapEl.querySelector(".tb-x").onclick = e => { e.stopPropagation(); closeInst(tab, inst); };
   wrapEl.querySelector(".tb-bc").onclick = e => {
     e.stopPropagation();
@@ -705,6 +707,88 @@ function installGutters(tab) {
   walk(tab.root);
 }
 
+
+/* ---- copy the whole terminal buffer (scrollback included) ---- */
+
+const NEWLINE = String.fromCharCode(10);
+
+function terminalText(term) {
+  const buf = term.buffer.active;
+  const lines = [];
+  for (let i = 0; i < buf.length; i++) {
+    const line = buf.getLine(i);
+    lines.push(line ? line.translateToString(true) : "");
+  }
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();   // drop trailing blanks
+  return lines.join(NEWLINE);
+}
+
+async function copyTerminal(inst, btn) {
+  if (!inst) return;
+  const text = terminalText(inst.term);
+  try {
+    await navigator.clipboard.writeText(text);
+    flashOk(btn, `✓ ${text ? text.split(NEWLINE).length : 0} lines`);
+  } catch (e) {
+    flashOk(btn, "✗ copy failed");
+  }
+}
+
+/* brief inline confirmation on a button, then restore its label */
+function flashOk(btn, msg) {
+  if (!btn) return;
+  if (btn.dataset.busy) return;
+  btn.dataset.busy = "1";
+  const old = btn.textContent, w = btn.getBoundingClientRect().width;
+  btn.style.minWidth = w + "px";
+  btn.textContent = msg;
+  btn.classList.add("ok");
+  setTimeout(() => {
+    btn.textContent = old;
+    btn.classList.remove("ok");
+    btn.style.minWidth = "";
+    delete btn.dataset.busy;
+  }, 1200);
+}
+
+/* ---- rename a tab (session-only, resets when the tab closes) ---- */
+
+function renameTab(tab) {
+  const labelEl = tab.tabEl.querySelector(".tlabel");
+  if (!labelEl) return;
+  const input = document.createElement("input");
+  input.className = "tab-rename";
+  input.value = labelEl.textContent;
+  const wasDraggable = tab.tabEl.draggable;
+  tab.tabEl.draggable = false;                 // an input inside a draggable is uneditable
+  labelEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = save => {
+    if (done) return;
+    done = true;
+    if (save) {
+      const v = input.value.trim();
+      tab.customName = v || null;              // empty → back to the automatic name
+    }
+    const span = document.createElement("span");
+    span.className = "tlabel";
+    input.replaceWith(span);
+    tab.tabEl.draggable = wasDraggable;
+    updateTabChrome(tab);
+  };
+  input.addEventListener("keydown", e => {
+    e.stopPropagation();
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+  ["click", "dblclick", "mousedown", "auxclick"].forEach(ev =>
+    input.addEventListener(ev, e => e.stopPropagation()));
+}
+
 /* ---- tabs ---- */
 
 function makeTab(title) {
@@ -729,6 +813,17 @@ function makeTab(title) {
   };
   tabEl.addEventListener("mousedown", e => { if (e.button === 1) e.preventDefault(); });
   tabEl.addEventListener("auxclick", e => { if (e.button === 1) { e.preventDefault(); closeTab(tab); } });
+  tabEl.addEventListener("dblclick", e => {
+    if (e.target.classList.contains("x")) return;
+    e.preventDefault();
+    renameTab(tab);
+  });
+  tabEl.oncontextmenu = e => ctxMenu(e, [
+    { label: "Rename tab", fn: () => renameTab(tab) },
+    ...(tab.customName ? [{ label: "Reset name", fn: () => { tab.customName = null; updateTabChrome(tab); } }] : []),
+    { label: "Copy all output", fn: () => copyTerminal(tab.focused || tab.insts[0], null) },
+    { label: "Close tab", danger: true, fn: () => closeTab(tab) },
+  ]);
   makeTabDraggable(tabEl);
   return tab;
 }
@@ -843,6 +938,12 @@ function pickSplitSource(dir) {
 }
 $("#split-h").onclick = async () => { const s = await pickSplitSource("row"); if (s) splitActive(s, "row"); };
 $("#split-v").onclick = async () => { const s = await pickSplitSource("column"); if (s) splitActive(s, "column"); };
+$("#copy-all").onclick = e => {
+  const tab = TABS.get(activeTab);
+  if (!tab) return flashOk(e.currentTarget, "no terminal");
+  copyTerminal(tab.focused || tab.insts[0], e.currentTarget);
+};
+
 $("#bcast").onclick = () => {
   const tab = TABS.get(activeTab);
   if (!tab) return;
@@ -894,7 +995,8 @@ function updateTabChrome(tab) {
   const multi = tab.insts.length > 1;
   tab.pane.classList.toggle("multi", multi);
   const first = tab.insts[0];
-  const base = first.source.kind === "local" ? "PowerShell" : first.host.label;
+  const base = tab.customName ||
+    (first.source.kind === "local" ? "PowerShell" : first.host.label);
   tab.tabEl.querySelector(".tlabel").textContent = base;
   const badge = tab.tabEl.querySelector(".tbadge");
   badge.textContent = multi ? String(tab.insts.length) : "";

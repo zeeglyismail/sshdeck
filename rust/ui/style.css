@@ -74,6 +74,14 @@ body.resizing * { transition: none !important; }
   transition: color .14s, border-color .14s, background .14s;
 }
 .tabrow-btn:hover { color: var(--accent); border-color: var(--accent); }
+.tabrow-btn.ok { color: var(--accent); border-color: var(--accent); }
+
+/* inline tab rename (double-click a tab, or right-click → Rename) */
+.tab-rename {
+  font: inherit; font-size: 12px; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--accent); border-radius: 3px;
+  padding: 0 4px; width: 12ch; min-width: 60px; outline: none;
+}
 
 /* password inputs with eye toggle */
 .pw-wrap { position: relative; display: flex; flex: 1; min-width: 140px; }
@@ -248,6 +256,7 @@ body.resizing-split .xterm { pointer-events: none; }   /* don't select terminal 
 .tsplit-bar button:hover { color: var(--accent); }
 .tsplit-bar .tb-bc { opacity: .35; }
 .tsplit-bar .tb-bc.on { opacity: 1; color: #e2b93d; }
+.tsplit-bar .tb-copy:hover { color: var(--accent); }
 .tsplit-bar .tb-x:hover { color: var(--danger); }
 .tabrow-btn.on { color: #e2b93d; border-color: #e2b93d; }
 label.inline { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
