@@ -129,7 +129,7 @@ body.resizing * { transition: none !important; }
 .meter i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width .4s cubic-bezier(.2,.8,.3,1); }
 .meter i.warn { background: #e2b93d; }
 .meter i.crit { background: var(--danger); }
-#st-cpugraph, #st-netgraph { background: var(--bg3); border-radius: 3px; }
+#st-cpugraph, #st-netgraph, #st-diskiograph { background: var(--bg3); border-radius: 3px; }
 .st-users-wrap { position: relative; cursor: default; }
 .st-users-wrap:hover #who-pop { display: block; }
 #who-pop { display: none; position: absolute; bottom: 24px; right: 0; z-index: 40; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; white-space: pre; box-shadow: 0 4px 16px rgba(0,0,0,.5); color: var(--fg); font-size: 11px; line-height: 1.7; min-width: 260px; max-height: 200px; overflow-y: auto; }

@@ -118,6 +118,11 @@ function fmtRate(n) {
   const mbps = n * 8 / 1e6;
   return mbps >= 1 ? mbps.toFixed(2) + " Mb/s" : (n / 1024).toFixed(1) + " kB/s";
 }
+/* disk throughput reads in bytes/s — MB/s, unlike the bit-based network rate */
+function fmtDiskRate(n) {
+  if (!n) return "0 kB/s";
+  return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB/s" : (n / 1024).toFixed(0) + " kB/s";
+}
 function fmtUptime(s) {
   const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
   return d > 0 ? `${d}d ${h}h` : `${h}h ${m}m`;
@@ -511,7 +516,7 @@ function createInst(tab, source) {
   term.open(el);
 
   const inst = { id: ++seq, tab, source, host: source.host || null, wrapEl, term, fit,
-                 unsubs: [], dead: false, bcast: true, stats: null, prev: {}, cpuHist: [], netHist: [] };
+                 unsubs: [], dead: false, bcast: true, stats: null, prev: {}, cpuHist: [], netHist: [], diskHist: [] };
 
   el.addEventListener("wheel", ev => {
     if (!ev.ctrlKey) return;
@@ -1111,6 +1116,29 @@ function parseStats(out, prev) {
     res.tx_rate = Math.max(0, (tx - prev.tx) / dt);
   } else { res.rx_rate = res.tx_rate = 0; }
   prev.rx = rx; prev.tx = tx; prev.up = up;
+
+  // disk I/O: /proc/diskstats sectors (512 B each) on whole disks only —
+  // partitions and dm-/loop devices would double-count the same traffic
+  let drd = 0, dwr = 0;
+  if (parts[7]) {
+    const rows = parts[7].split(NEWLINE).map(l => l.trim().split(/\s+/)).filter(f => f.length >= 10);
+    const names = rows.map(f => f[2]);
+    const isPartition = n => names.some(par =>
+      par !== n && n.startsWith(par) && /^p?\d+$/.test(n.slice(par.length)));
+    for (const f of rows) {
+      const name = f[2];
+      if (/^(loop|ram|zram|sr|fd|dm-|md)/.test(name) || isPartition(name)) continue;
+      drd += parseInt(f[5]) * 512;      // sectors read
+      dwr += parseInt(f[9]) * 512;      // sectors written
+    }
+  }
+  if (prev.drd !== undefined && prev.dup) {
+    const dt = Math.max(0.001, up - prev.dup);
+    res.disk_rd = Math.max(0, (drd - prev.drd) / dt);
+    res.disk_wr = Math.max(0, (dwr - prev.dwr) / dt);
+  } else { res.disk_rd = res.disk_wr = 0; }
+  prev.drd = drd; prev.dwr = dwr; prev.dup = up;
+
   res.uptime = up;
   res.who = parts[6].split("\n").map(l => l.trim().replace(/\s+/g, " ")).filter(Boolean);
   res.users = res.who.length;
@@ -1155,6 +1183,14 @@ function renderStats(t) {
     { data: t.netHist.map(d => d.rx), color: GRAPH.cpu, max: nmax },
     { data: t.netHist.map(d => d.tx), color: GRAPH.tx, max: nmax },
   ]);
+  const dh = t.diskHist || [];
+  const dmax = Math.max(1048576, ...dh.map(d => Math.max(d.rd, d.wr)));   // 1 MB/s floor
+  drawGraph($("#st-diskiograph"), [
+    { data: dh.map(d => d.rd), color: GRAPH.cpu, max: dmax },
+    { data: dh.map(d => d.wr), color: GRAPH.tx, max: dmax },
+  ]);
+  $("#st-drd").textContent = "R " + fmtDiskRate(s.disk_rd || 0);
+  $("#st-dwr").textContent = "W " + fmtDiskRate(s.disk_wr || 0);
   $("#st-tx").textContent = "↑" + fmtRate(s.tx_rate);
   $("#st-rx").textContent = "↓" + fmtRate(s.rx_rate);
   $("#st-up").textContent = fmtUptime(s.uptime);

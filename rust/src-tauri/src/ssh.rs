@@ -163,7 +163,8 @@ df -kP / | tail -1; echo @@; \
 cat /proc/net/dev; echo @@; \
 cut -d' ' -f1 /proc/uptime; echo @@; \
 cut -d' ' -f1-3 /proc/loadavg; echo @@; \
-who";
+who; echo @@; \
+cat /proc/diskstats";
 
 /// Spawn an interactive SSH terminal session; terminal I/O flows over
 /// the same `pty-out-{id}` / `pty-exit-{id}` events the local PTY uses,
