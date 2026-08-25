@@ -146,6 +146,20 @@ a plain exec channel instead: `tail -c +N | zstd -1 -c` for reads,
   `webkitGetAsEntry()`, and it MUST be called synchronously in the drop handler —
   awaiting first empties `dataTransfer.items`. `readEntries` also returns at most
   100 per call, so loop until it is dry or you silently lose files.
+- **The transfer strip has TWO row sources and they must go through one render.**
+  Rust-owned rows arrive in the `transfers` event; a local file still being
+  spooled to a temp file exists only in JS, because no transfer exists yet. The
+  old code appended spool rows straight into `#tr-list`, so the next event —
+  including the one "clear finished" triggers — wiped them mid-upload and the row
+  reappeared later when the real transfer began. `PREP` + `SERVER_ROWS` +
+  `renderTransfers()` is the fix; `clear finished` only ever drops finished
+  server rows, and a prep row retires when a server row with the same `desc`
+  appears (so the JS desc must match `format!("{name} → {label}:{dir}")` exactly).
+- **Spooling must be cancellable.** It is the longest phase for a big local file
+  (base64 chunks over IPC) and there was no way to stop it.
+- **Write commands run as `{ …; } 2>&1`** so the drain captures the remote's own
+  message. Otherwise a real remote failure (no space, permission, read-only
+  mount) surfaces as a bare "Channel send error" that says nothing.
 - **Two transfers must never share a destination.** Dropping the same file twice
   gave both `dd` writes one path; the second `: > file` truncated under the first
   and the channel died with "Channel send error". `claim_dest` refuses the second.

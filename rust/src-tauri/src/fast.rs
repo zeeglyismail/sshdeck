@@ -196,12 +196,16 @@ fn write_cmd(path: &str, offset: u64, compress: bool) -> String {
     } else {
         dd
     };
-    if offset == 0 {
+    let body = if offset == 0 {
         // fresh transfer: clear any previous partial file first
         format!(": > {}; {}", q, body)
     } else {
         body
-    }
+    };
+    // Nothing legitimate comes back on stdout for a write, so fold stderr into
+    // it. Otherwise a remote failure (no space, permission denied, read-only
+    // mount) reaches the user as a bare "Channel send error" with no clue why.
+    format!("{{ {}; }} 2>&1", body)
 }
 
 /* ---------- plumbing ---------- */
@@ -262,17 +266,39 @@ async fn open_exec(h: &Handle<Client>, cmd: &str) -> Result<Stream, String> {
 /// once the initial window is spent nothing ever refills it. Draining stdout
 /// concurrently keeps the window moving, and the drain finishing is also our
 /// signal that the remote command has exited.
-fn split_drain(stream: Stream) -> (tokio::io::WriteHalf<Stream>, tokio::task::JoinHandle<()>) {
+type Said = Arc<std::sync::Mutex<Vec<u8>>>;
+
+fn split_drain(stream: Stream) -> (tokio::io::WriteHalf<Stream>, tokio::task::JoinHandle<()>, Said) {
     let (mut rd, wr) = tokio::io::split(stream);
+    let said: Said = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = said.clone();
     let drain = tokio::spawn(async move {
         let mut b = vec![0u8; 8192];
         while let Ok(n) = rd.read(&mut b).await {
             if n == 0 {
                 break;
             }
+            // keep only the first few hundred bytes; that is where the message is
+            let mut acc = sink.lock().unwrap();
+            if acc.len() < 512 {
+                let room = 512 - acc.len();
+                acc.extend_from_slice(&b[..n.min(room)]);
+            }
         }
     });
-    (wr, drain)
+    (wr, drain, said)
+}
+
+/// Turn a bare transport error into one that names the actual cause.
+fn explain(e: String, said: &Said) -> String {
+    let raw = said.lock().unwrap();
+    let msg = String::from_utf8_lossy(&raw);
+    let msg = msg.trim();
+    if msg.is_empty() {
+        e
+    } else {
+        format!("{e} — remote said: {msg}")
+    }
 }
 
 /// Delete a remote file. Used to clear the stub a canceled transfer leaves.
@@ -366,7 +392,7 @@ pub async fn upload(
     cancel: Cancel,
 ) -> Result<(), String> {
     let stream = open_exec(h, &write_cmd(remote, offset, compress)).await?;
-    let (mut stream, drain) = split_drain(stream);
+    let (mut stream, drain, said) = split_drain(stream);
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(PIPE_CHUNKS);
 
     let lp = local.to_string();
@@ -409,15 +435,33 @@ pub async fn upload(
         Ok(())
     });
 
+    let mut sent: Result<(), String> = Ok(());
     while let Some(chunk) = rx.recv().await {
-        stream.write_all(&chunk).await.map_err(es)?;
+        if let Err(e) = stream.write_all(&chunk).await {
+            sent = Err(es(e));
+            break;
+        }
     }
-    reader.await.map_err(es)??;
+    // let the reader finish either way, so the blocking thread is never orphaned
+    let read_res = reader.await.map_err(es)?;
     stream.flush().await.ok();
     // EOF tells the remote `dd` the file is complete
-    stream.shutdown().await.map_err(es)?;
+    let closed = stream.shutdown().await.map_err(es);
     // wait for the remote command to exit before we trust the result
     let _ = drain.await;
+    // the remote message is worth more than our transport error, so surface it
+    sent.map_err(|e| explain(e, &said))?;
+    read_res.map_err(|e| explain(e, &said))?;
+    closed.map_err(|e| explain(e, &said))?;
+    {
+        let raw = said.lock().unwrap();
+        let msg = String::from_utf8_lossy(&raw);
+        let msg = msg.trim().to_string();
+        drop(raw);
+        if !msg.is_empty() && !stopped(&cancel) {
+            return Err(format!("remote said: {msg}"));
+        }
+    }
     if stopped(&cancel) {
         return Err(PAUSED.into());
     }
@@ -440,7 +484,7 @@ pub async fn host_to_host(
     cancel: Cancel,
 ) -> Result<(), String> {
     let mut rs = open_exec(src, &read_cmd(src_path, offset, compress)).await?;
-    let (mut ws, drain) = split_drain(open_exec(dst, &write_cmd(dst_path, offset, compress)).await?);
+    let (mut ws, drain, said) = split_drain(open_exec(dst, &write_cmd(dst_path, offset, compress)).await?);
     let mut buf = vec![0u8; READ_BUF];
     let mut paused = false;
     loop {
@@ -452,11 +496,11 @@ pub async fn host_to_host(
         if n == 0 {
             break;
         }
-        ws.write_all(&buf[..n]).await.map_err(es)?;
+        ws.write_all(&buf[..n]).await.map_err(|e| explain(es(e), &said))?;
         done.fetch_add(n as u64, Ordering::Relaxed);
     }
     ws.flush().await.ok();
-    ws.shutdown().await.map_err(es)?;
+    ws.shutdown().await.map_err(|e| explain(es(e), &said))?;
     let _ = drain.await;
     if paused {
         return Err(PAUSED.into());

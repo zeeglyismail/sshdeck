@@ -1450,8 +1450,7 @@ async function expandDrop(entries) {
 
 async function uploadLocalFiles(P, files, reload, dirs) {
   const host = hostById(P.hostId);
-  const box = $("#transfers"), list = $("#tr-list");
-  box.classList.remove("hidden");
+  $("#transfers").classList.remove("hidden");
   // shallowest first, so parents exist before their children
   for (const d of (dirs || []).slice().sort((a, b) => a.split("/").length - b.split("/").length)) {
     await invoke("sftp_mkdir", { hostId: P.hostId, path: joinPath(P.path, d) }).catch(() => {});
@@ -1460,33 +1459,50 @@ async function uploadLocalFiles(P, files, reload, dirs) {
     const file = entry.file || entry;
     const rel = entry.rel || "";
     const destDir = rel ? joinPath(P.path, rel) : P.path;
-    const row = document.createElement("div");
-    row.className = "tr-item running";
-    row.innerHTML = `<span class="desc">${esc(rel ? rel + "/" + file.name : file.name)} → ${esc(host.label)}:${esc(destDir)}</span>` +
-      `<span class="meter"><i style="width:0%"></i></span><span class="status">reading…</span>`;
-    list.appendChild(row);
-    const bar = row.querySelector("i"), st = row.querySelector(".status");
-    let path;
+    const key = "prep" + (++PREP_SEQ);
+    // the description has to match what Rust builds, so the prep row can retire
+    // the moment the real transfer takes over
+    const row = {
+      id: key, desc: `${file.name} → ${host.label}:${destDir}`,
+      done: 0, total: file.size, status: "preparing", error: null,
+      speed: 0, method: "", resumable: false, elapsed_ms: 0,
+      cancel: false, handedOff: false,
+    };
+    PREP.set(key, row);
+    renderTransfers();
+    let path, painted = 0;
     try {
       path = await invoke("stash_begin", { name: file.name });
       for (let off = 0; off < file.size; off += STASH_CHUNK) {
+        if (row.cancel) throw new Error("__canceled__");
         const buf = await file.slice(off, off + STASH_CHUNK).arrayBuffer();
         await invoke("stash_append", { path, chunk: b64(new Uint8Array(buf)) });
-        const pct = Math.min(100, Math.round((off + STASH_CHUNK) / file.size * 100));
-        bar.style.width = pct + "%";
-        st.textContent = fmtBytes(Math.min(file.size, off + STASH_CHUNK)) + " / " + fmtBytes(file.size);
+        row.done = Math.min(file.size, off + STASH_CHUNK);
+        // repaint a few times a second, not once per chunk
+        if (Date.now() - painted > 200) { painted = Date.now(); renderTransfers(); }
       }
-      st.textContent = "uploading…";
+      if (row.cancel) throw new Error("__canceled__");
+      row.handedOff = true;
+      renderTransfers();
       await invoke("sftp_upload", {
         ...fastOpts(),
         hostId: P.hostId, localPath: path, remoteDir: destDir, hostLabel: host.label,
       });
-      row.remove();               // the transfers event takes over from here
     } catch (e) {
-      row.className = "tr-item error";
-      st.textContent = "✗ " + e;
-      // only on failure — on success the upload task deletes the spool itself
-      // (sftp_upload returns as soon as the background transfer is spawned)
+      PREP.delete(key);
+      if (String(e).includes("__canceled__")) {
+        // nothing was handed to the transfer layer yet, so there is nothing to
+        // show — just drop the spool
+      } else {
+        SERVER_ROWS = SERVER_ROWS.concat([{
+          id: key, desc: row.desc, done: 0, total: null, status: "error",
+          error: String(e && e.message ? e.message : e), speed: 0,
+          method: "", resumable: false, elapsed_ms: 0,
+        }]);
+      }
+      renderTransfers();
+      // on success the upload task deletes the spool itself, since sftp_upload
+      // returns as soon as the background transfer is spawned
       if (path) invoke("stash_cleanup", { path });
     }
   }
@@ -1799,7 +1815,19 @@ function buildPane(paneEl, i) {
   });
 }
 
-/* transfers strip */
+/* transfers strip
+ *
+ * There are two kinds of row and they used to fight. Rows the Rust side owns
+ * arrive in the `transfers` event; rows for a local file still being spooled to
+ * a temp file exist only here, because the transfer has not started yet. The
+ * old code appended the local ones straight into the list, so the next event —
+ * including the one "clear finished" triggers — wiped them mid-upload, and the
+ * row reappeared later when the real transfer began. Both kinds now go through
+ * one render, and only the server ones are ever cleared. */
+const PREP = new Map();          // spooling rows, keyed by a local id
+let PREP_SEQ = 0;
+let SERVER_ROWS = [];
+
 function fmtEta(secs) {
   if (!isFinite(secs) || secs <= 0) return "";
   if (secs < 60) return Math.round(secs) + "s";
@@ -1814,26 +1842,30 @@ function trButton(cls, label, title, fn) {
   b.onclick = () => fn(b);
   return b;
 }
-listen("transfers", ev => {
-  const list = ev.payload;
-  const box = $("#transfers");
-  const el = $("#tr-list");
-  box.classList.toggle("hidden", !list.length);
+
+function renderTransfers() {
+  const box = $("#transfers"), el = $("#tr-list");
+  // once the real transfer exists under the same description, the prep row has
+  // done its job — drop it rather than showing the file twice
+  const live = new Set(SERVER_ROWS.map(t => t.desc));
+  for (const [k, p] of PREP) if (p.handedOff && live.has(p.desc)) PREP.delete(k);
+
+  const rows = SERVER_ROWS.concat([...PREP.values()]);
+  box.classList.toggle("hidden", !rows.length);
   el.innerHTML = "";
-  let anyDone = false;
-  for (const t of list) {
-    if (t.status !== "running") anyDone = true;
+  for (const t of rows) {
     const item = document.createElement("div");
     item.className = "tr-item " + t.status;
     const pct = t.total ? Math.round(t.done / t.total * 100) : null;
-    // the badge earns its space: it is the only way to tell whether a slow
-    // transfer is streaming or quietly fell back to SFTP
+    // the badge is the only way to tell a streaming transfer from one that
+    // quietly fell back to SFTP
     const badge = t.method && t.method !== "sftp"
       ? `<span class="tr-badge ${t.method === "fast+zstd" ? "zstd" : ""}">${esc(t.method)}</span>` : "";
-    // average over the whole transfer, so a finished row still reports how fast it went
     const avg = t.elapsed_ms > 500 ? t.done / (t.elapsed_ms / 1000) : 0;
     let status;
-    if (t.status === "running") {
+    if (t.status === "preparing") {
+      status = "reading " + fmtBytes(t.done) + " / " + fmtBytes(t.total);
+    } else if (t.status === "running") {
       const eta = t.speed && t.total ? fmtEta((t.total - t.done) / t.speed) : "";
       status = fmtBytes(t.done) + (t.total ? " / " + fmtBytes(t.total) : "")
         + (t.speed ? " \u00b7 " + fmtBytes(t.speed) + "/s" : "")
@@ -1851,7 +1883,12 @@ listen("transfers", ev => {
       <span class="desc" title="${esc(t.desc)}">${esc(t.desc)}</span>${badge}
       <span class="meter"><i style="width:${pct ?? (t.status === "done" ? 100 : 30)}%"></i></span>
       <span class="status">${status}</span>`;
-    if (t.status === "running") {
+
+    if (t.status === "preparing") {
+      // cancellable from the first byte read, not only once the transfer starts
+      item.appendChild(trButton("tr-act tr-x", "\u2715", "Cancel — stop reading this file",
+        b => { b.disabled = true; t.cancel = true; }));
+    } else if (t.status === "running") {
       item.appendChild(trButton("tr-act", "\u23f8 Pause", "Stop now and keep what has transferred, so Resume can finish it later",
         b => { b.disabled = true; invoke("transfer_pause", { id: t.id }); }));
       item.appendChild(trButton("tr-act tr-x", "\u2715", "Cancel this transfer and delete the partial file",
@@ -1864,15 +1901,38 @@ listen("transfers", ev => {
           invoke("transfer_resume", { id: t.id, ...fastOpts() }).catch(e => { b.disabled = false; alert(e); });
         }));
     }
-    if (t.status !== "running") {
-      item.appendChild(trButton("tr-act tr-x", "\u2715", "Remove this row",
-        () => invoke("transfer_forget", { id: t.id })));
+    if (t.status !== "running" && t.status !== "preparing") {
+      item.appendChild(trButton("tr-act tr-x", "\u2715", "Remove this row", () => forgetRow(t.id)));
     }
     el.appendChild(item);
   }
-  if (anyDone) PANES.forEach(P => { if (P.hostId && P.load) P.load(); });
+}
+
+/* a row raised here — a spool that failed before any transfer existed — carries
+   a string id, so it is ours to remove; numeric ids belong to Rust */
+function forgetRow(id) {
+  if (typeof id === "string") {
+    SERVER_ROWS = SERVER_ROWS.filter(t => t.id !== id);
+    renderTransfers();
+  } else {
+    invoke("transfer_forget", { id });
+  }
+}
+
+listen("transfers", ev => {
+  // keep local-only rows; the payload only knows about Rust-side transfers
+  const localOnly = SERVER_ROWS.filter(t => typeof t.id === "string");
+  SERVER_ROWS = ev.payload.concat(localOnly);
+  renderTransfers();
+  if (ev.payload.some(t => t.status !== "running"))
+    PANES.forEach(P => { if (P.hostId && P.load) P.load(); });
 });
-$("#tr-clear").onclick = () => invoke("transfers_clear");
+$("#tr-clear").onclick = () => {
+  // never touches anything still in flight, here or on the Rust side
+  SERVER_ROWS = SERVER_ROWS.filter(t => typeof t.id !== "string");
+  renderTransfers();
+  invoke("transfers_clear");
+};
 
 /* ---------- tunnels (M4) ---------- */
 
