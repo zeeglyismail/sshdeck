@@ -254,7 +254,7 @@ pub fn spawn_session(app: AppHandle, sessions: &SshSessions, id: u32, spec: Conn
     });
 }
 
-async fn run_command(handle: &Handle<Client>, cmd: &str) -> Option<String> {
+pub(crate) async fn run_command(handle: &Handle<Client>, cmd: &str) -> Option<String> {
     let mut channel = handle.channel_open_session().await.ok()?;
     channel.exec(true, cmd).await.ok()?;
     let mut out = Vec::new();

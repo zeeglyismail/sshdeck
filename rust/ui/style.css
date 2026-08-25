@@ -143,6 +143,12 @@ body.resizing * { transition: none !important; }
 .fp-head { display: flex; gap: 6px; padding: 8px; background: var(--panel); border-bottom: 1px solid var(--border); align-items: center; }
 .fp-head input.hostsel { flex: 0 1 230px; min-width: 120px; font-size: 12px; }
 .fp-head input.path { flex: 1 1 100px; min-width: 60px; font-family: var(--mono); font-size: 12px; }
+.fp-find { display: flex; gap: 6px; align-items: center; padding: 0 8px 6px; }
+.fp-find .findbox { flex: 1; min-width: 120px; font-size: 12px; }
+.fp-find .findnote { font-size: 11px; white-space: nowrap; }
+.fp-row .fwhere { color: var(--muted); font-family: var(--mono); font-size: 11px;
+  max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+
 .fp-tools { display: flex; gap: 4px; padding: 5px 8px; border-bottom: 1px solid var(--border); background: var(--bg2); flex-wrap: wrap; }
 .fp-tools button { background: none; border: 1px solid transparent; color: var(--muted); border-radius: 4px; padding: 3px 8px; font-size: 12px; }
 .fp-tools button:hover { color: var(--accent); border-color: var(--border); }

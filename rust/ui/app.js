@@ -1466,6 +1466,12 @@ function buildPane(paneEl, i) {
       <button class="btn-ghost small go" title="Go / refresh">⟳</button>
       <button class="btn-ghost small disc" title="Release the file session for this host (terminals stay connected)">⏻</button>
     </div>
+    <div class="fp-find">
+      <input class="findbox" placeholder="🔎 search files in this folder and below — type .json and press Enter" spellcheck="false">
+      <button class="btn-ghost small findgo" title="Search">Search</button>
+      <button class="btn-ghost small findclear hidden" title="Back to browsing">✕ clear</button>
+      <span class="findnote muted"></span>
+    </div>
     <div class="fp-tools">
       <button class="up">⬆ up</button>
       <button class="upload">Upload</button>
@@ -1538,6 +1544,97 @@ function buildPane(paneEl, i) {
       row.ondragstart = ev => {
         if (!P.selIdx.has(idx)) { P.selIdx = new Set([idx]); P.anchor = idx; syncSel(); }
         const items = selected().map(e => ({ path: joinPath(P.path, e.name), is_dir: e.is_dir, name: e.name }));
+        ev.dataTransfer.setData("application/x-deck", JSON.stringify({ pane: i, hostId: P.hostId, items }));
+        ev.dataTransfer.effectAllowed = "copy";
+      };
+    });
+  }
+
+  /* ---- Explorer-style search: `find` runs on the server, from the current folder down ---- */
+  const findBox = paneEl.querySelector(".findbox");
+  const findNote = paneEl.querySelector(".findnote");
+  const findClear = paneEl.querySelector(".findclear");
+
+  function exitSearch() {
+    P.searching = false;
+    findBox.value = "";
+    findNote.textContent = "";
+    findClear.classList.add("hidden");
+    load(P.path);
+  }
+  findClear.onclick = exitSearch;
+
+  async function runFind() {
+    const q = findBox.value.trim();
+    if (!P.hostId) return;
+    if (!q) return exitSearch();
+    findNote.textContent = "searching…";
+    findClear.classList.remove("hidden");
+    listEl.innerHTML = '<div class="fp-empty">searching ' + esc(P.path) + ' …</div>';
+    try {
+      const r = await invoke("sftp_find", { hostId: P.hostId, path: P.path, query: q, limit: 1000 });
+      P.searching = true;
+      P.entries = r.hits;
+      P.selIdx = new Set();
+      P.anchor = null;
+      findNote.textContent = r.note || `${r.hits.length} match${r.hits.length === 1 ? "" : "es"}`;
+      renderFindResults(r.hits);
+    } catch (e) {
+      findNote.textContent = "";
+      listEl.innerHTML = `<div class="fp-empty">✗ ${esc(e)}</div>`;
+    }
+  }
+  findBox.addEventListener("keydown", e => {
+    e.stopPropagation();
+    if (e.key === "Enter") { e.preventDefault(); runFind(); }
+    else if (e.key === "Escape") { e.preventDefault(); exitSearch(); }
+  });
+  paneEl.querySelector(".findgo").onclick = runFind;
+
+  function renderFindResults(hits) {
+    if (!hits.length) { listEl.innerHTML = '<div class="fp-empty">no matches</div>'; return; }
+    const rows = hits.map((e, idx) => `
+      <tr class="fp-row ${e.is_dir ? "dir" : ""}" draggable="true" data-i="${idx}">
+        <td class="fname"><span class="ficon">${e.is_dir ? "📁" : "📄"}</span>${esc(e.name)}</td>
+        <td class="fwhere" title="${esc(e.dir)}">${esc(e.dir)}</td>
+        <td class="fsize">${e.is_dir ? "" : fmtBytes(e.size)}</td>
+        <td class="fdate">${fmtDate(e.mtime)}</td>
+      </tr>`).join("");
+    listEl.innerHTML = `<table class="fp-table">
+      <thead><tr><th>Name</th><th>Folder</th><th>Size</th><th>Modified</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+    const syncSel = () => listEl.querySelectorAll(".fp-row").forEach(r =>
+      r.classList.toggle("sel", P.selIdx.has(+r.dataset.i)));
+    listEl.querySelectorAll(".fp-row").forEach(row => {
+      const idx = +row.dataset.i, hit = hits[idx];
+      row.onclick = ev => {
+        if (ev.ctrlKey || ev.metaKey) { P.selIdx.has(idx) ? P.selIdx.delete(idx) : P.selIdx.add(idx); P.anchor = idx; }
+        else if (ev.shiftKey && P.anchor !== null) {
+          P.selIdx = new Set();
+          const [a, b] = [Math.min(P.anchor, idx), Math.max(P.anchor, idx)];
+          for (let k = a; k <= b; k++) P.selIdx.add(k);
+        } else { P.selIdx = new Set([idx]); P.anchor = idx; }
+        syncSel();
+      };
+      // open a folder, or jump to the folder holding the file and select it
+      row.ondblclick = async () => {
+        const target = hit.is_dir ? hit.path : hit.dir;
+        findBox.value = ""; findNote.textContent = ""; findClear.classList.add("hidden");
+        P.searching = false;
+        await load(target);
+        if (!hit.is_dir) {
+          const i = P.entries.findIndex(x => x.name === hit.name);
+          if (i >= 0) {
+            P.selIdx = new Set([i]); P.anchor = i;
+            listEl.querySelectorAll(".fp-row").forEach(r => r.classList.toggle("sel", +r.dataset.i === i));
+            listEl.querySelector(`.fp-row[data-i="${i}"]`)?.scrollIntoView({ block: "center" });
+          }
+        }
+      };
+      row.ondragstart = ev => {
+        if (!P.selIdx.has(idx)) { P.selIdx = new Set([idx]); P.anchor = idx; syncSel(); }
+        const items = [...P.selIdx].map(k => hits[k]).filter(Boolean)
+          .map(e => ({ path: e.path, is_dir: e.is_dir, name: e.name }));
         ev.dataTransfer.setData("application/x-deck", JSON.stringify({ pane: i, hostId: P.hostId, items }));
         ev.dataTransfer.effectAllowed = "copy";
       };

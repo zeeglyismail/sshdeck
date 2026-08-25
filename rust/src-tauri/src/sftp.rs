@@ -405,3 +405,111 @@ pub async fn sftp_upload(
     });
     Ok(())
 }
+
+/* ---------- search (server-side `find`) ---------- */
+
+#[derive(Serialize)]
+pub struct FindHit {
+    name: String,
+    path: String,
+    dir: String,
+    is_dir: bool,
+    size: u64,
+    mtime: u64,
+}
+
+#[derive(Serialize)]
+pub struct FindResult {
+    hits: Vec<FindHit>,
+    truncated: bool,
+    note: Option<String>,
+}
+
+/// Single-quote a value for the remote shell.
+fn shq(v: &str) -> String {
+    format!("'{}'", v.replace('\'', "'\''"))
+}
+
+/// Explorer-style search: recursive, case-insensitive substring match, run by
+/// `find` ON THE SERVER (walking the tree over SFTP would be far slower).
+#[tauri::command]
+pub async fn sftp_find(
+    app: AppHandle,
+    pool: State<'_, SshPool>,
+    host_id: i64,
+    path: String,
+    query: String,
+    limit: usize,
+) -> Result<FindResult, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Err("nothing to search for".into());
+    }
+    // a bare word matches anywhere in the name; wildcards are honoured as typed
+    let pattern = if q.contains('*') || q.contains('?') {
+        q.to_string()
+    } else {
+        format!("*{q}*")
+    };
+    let cap = limit.clamp(1, 5000);
+    // prune pseudo/virtual trees so a search from / doesn't crawl them, drop
+    // permission errors, and never run longer than 60s
+    // Each prune is its own branch so the command needs no shell grouping
+    // (backslash-escaped parens): skips pseudo trees, .git and node_modules,
+    // hides permission errors, and can never run longer than 60s.
+    // Each prune is its own branch so no shell grouping (escaped parens) is needed:
+    // skips pseudo trees, .git and node_modules, hides permission errors, hard 60s cap.
+    let cmd = format!(
+        "timeout 60 find {} -path /proc -prune -o -path /sys -prune -o -path /dev -prune -o -path /run -prune -o -name .git -prune -o -name node_modules -prune -o -iname {} -printf '%y\t%s\t%T@\t%p\n' 2>/dev/null | head -n {}",
+        shq(&path),
+        shq(&pattern),
+        cap + 1
+    );
+
+    let spec = crate::build_spec(&app, host_id)?;
+    let handle = pooled(&pool, host_id, spec).await?;
+    let out = crate::ssh::run_command(&handle, &cmd)
+        .await
+        .ok_or("search failed (connection lost)")?;
+
+    let mut hits = Vec::new();
+    for line in out.lines() {
+        let mut f = line.splitn(4, '\t');
+        let (Some(ty), Some(size), Some(mtime), Some(full)) =
+            (f.next(), f.next(), f.next(), f.next())
+        else {
+            continue;
+        };
+        let full = full.trim_end();
+        if full.is_empty() {
+            continue;
+        }
+        let (dir, name) = match full.rsplit_once('/') {
+            Some((d, n)) => (if d.is_empty() { "/" } else { d }, n),
+            None => ("/", full),
+        };
+        hits.push(FindHit {
+            name: name.to_string(),
+            path: full.to_string(),
+            dir: dir.to_string(),
+            is_dir: ty == "d",
+            size: size.parse().unwrap_or(0),
+            mtime: mtime.split('.').next().and_then(|s| s.parse().ok()).unwrap_or(0),
+        });
+    }
+
+    let truncated = hits.len() > cap;
+    hits.truncate(cap);
+    // directories first, then by name — same ordering as the browser view
+    hits.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    let note = if truncated {
+        Some(format!("showing the first {cap} matches — narrow the search"))
+    } else {
+        None
+    };
+    Ok(FindResult { hits, truncated, note })
+}

@@ -442,7 +442,7 @@ fn main() {
             identity_save, identity_delete, key_save, key_delete,
             ssh_spawn, ssh_write, ssh_resize, ssh_kill,
             sftp::sftp_list, sftp::sftp_mkdir, sftp::sftp_rename, sftp::sftp_chmod,
-            sftp::sftp_delete, sftp::sftp_download, sftp::sftp_upload,
+            sftp::sftp_delete, sftp::sftp_download, sftp::sftp_upload, sftp::sftp_find,
             sftp::transfer_start, sftp::transfers_clear,
             tunnels::tunnels_list, tunnels::tunnel_save, tunnels::tunnel_delete,
             tunnels::tunnel_start, tunnels::tunnel_stop,
