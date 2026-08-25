@@ -1110,10 +1110,19 @@ function parseStats(out, prev) {
   res.mem_used = ((mem.MemTotal || 0) - (mem.MemAvailable || 0)) * 1024;
   const df = parts[2].split(/\s+/);
   res.disk_pct = df.length >= 5 ? parseInt(df[4]) || 0 : 0;
+  // Count PHYSICAL interfaces only. Summing everything but `lo` triples the
+  // numbers on a hypervisor: one packet to a guest shows up on the NIC, on the
+  // bridge and on the tap. Only real hardware has /sys/class/net/<if>/device,
+  // so the host tells us which those are; if it cannot, fall back to the old
+  // behaviour rather than reporting nothing.
+  const physical = new Set((parts[8] || "").split(NEWLINE).map(x => x.trim()).filter(Boolean));
   let rx = 0, tx = 0;
   for (const line of parts[3].split("\n").slice(2)) {
     const [name, rest] = line.split(":");
-    if (!rest || name.trim() === "lo") continue;
+    if (!rest) continue;
+    const nic = name.trim();
+    if (nic === "lo") continue;
+    if (physical.size && !physical.has(nic)) continue;
     const f = rest.trim().split(/\s+/);
     if (f.length >= 9) { rx += parseInt(f[0]); tx += parseInt(f[8]); }
   }
@@ -1135,7 +1144,9 @@ function parseStats(out, prev) {
       par !== n && n.startsWith(par) && /^p?\d+$/.test(n.slice(par.length)));
     for (const f of rows) {
       const name = f[2];
-      if (/^(loop|ram|zram|sr|fd|dm-|md)/.test(name) || isPartition(name)) continue;
+      // zd* are ZFS zvols and nbd/drbd are network block devices: their traffic
+      // is already counted again on the physical disks underneath them
+      if (/^(loop|ram|zram|sr|fd|dm-|md|zd|nbd|drbd)/.test(name) || isPartition(name)) continue;
       drd += parseInt(f[5]) * 512;      // sectors read
       dwr += parseInt(f[9]) * 512;      // sectors written
     }

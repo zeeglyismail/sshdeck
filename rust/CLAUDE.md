@@ -183,6 +183,17 @@ a plain exec channel instead: `tail -c +N | zstd -1 -c` for reads,
   ours — looks like a duplicate icon bug. Killed with `::-ms-reveal { display:none }`.
 - **`::-webkit-scrollbar-corner` defaults to solid white** where a vertical and a
   horizontal scrollbar meet. Always style it alongside track and thumb.
+- **Monitoring must count PHYSICAL NICs only.** Summing every interface but `lo`
+  triples the numbers on a hypervisor: one packet to a guest appears on the NIC,
+  the bridge and the tap. Verified against a synthetic host05-shaped
+  `/proc/net/dev`: 6x inflation before, exact after. Only real hardware has
+  `/sys/class/net/<if>/device`, so `STATS_CMD` asks for that list (section 9) and
+  the parser filters by it, falling back to the old behaviour if it is empty.
+  **The web app (`static/app.js`) still has this bug** — same parser, not fixed
+  there because the owner asked for desktop-only changes.
+- **`zd*` (ZFS zvols) double-count disk I/O**, as do `nbd`/`drbd`: their traffic
+  is counted again on the physical disks underneath. host05 runs ZFS, so this
+  roughly doubled the DISK I/O readout.
 - **Progress events must be throttled.** The old code emitted a `transfers` event
   per 512 KB chunk — 600k events for a 300 GB file, enough to drown the webview.
   Transfers now bump an `AtomicU64` and one 400 ms ticker turns it into events
