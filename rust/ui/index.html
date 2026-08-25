@@ -140,6 +140,14 @@
             <input type="number" id="sb-lines" min="1000" max="200000" step="1000" style="width:110px">
             <span class="muted">history kept per terminal (default 50000)</span></label>
 
+          <h3>Large transfers</h3>
+          <label class="chk"><input type="checkbox" id="pref-fast">
+            Accelerated transfers &mdash; stream big files over an exec channel instead of SFTP</label>
+          <label class="chk">Use it for files above
+            <input type="number" id="pref-fast-min" min="1" max="100000" step="1" style="width:110px"> MB
+            <span class="muted">smaller files stay on SFTP, where the setup cost would outweigh the gain</span></label>
+          <p class="muted">SFTP waits for an acknowledgement every 512&nbsp;KB, so its ceiling is <b>512&nbsp;KB &divide; round-trip time</b> &mdash; about 16&nbsp;MB/s at 30&nbsp;ms no matter how fast the link is. Streaming removes that ceiling. SSHDeck also samples the file and turns on <b>zstd</b> compression when it actually shrinks (database dumps do, packed archives do not), and writes sparsely so a mostly-empty disk image stays a hole on the destination. Needs <code>zstd</code>, GNU <code>dd</code> and <code>tail</code> on the host; anything missing falls back to SFTP automatically.</p>
+
           <h3>Backup &amp; restore</h3>
           <p class="muted">Full backup: folders (nested), hosts, identities and keys — <b>credentials included in readable form</b>, so it restores here or in the web version. Keep the file safe.</p>
           <div class="row-gap">

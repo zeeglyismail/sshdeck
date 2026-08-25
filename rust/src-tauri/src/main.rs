@@ -5,6 +5,7 @@
 mod crypto;
 mod db;
 mod export;
+mod fast;
 mod portability;
 mod sftp;
 mod ssh;
@@ -424,6 +425,7 @@ fn main() {
         .manage(SshSessions::default())
         .manage(ssh::SshPool::default())
         .manage(sftp::Transfers::default())
+        .manage(fast::CapsCache::default())
         .manage(tunnels::Active::default())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("app data dir");
@@ -443,7 +445,7 @@ fn main() {
             ssh_spawn, ssh_write, ssh_resize, ssh_kill,
             sftp::sftp_list, sftp::sftp_mkdir, sftp::sftp_rename, sftp::sftp_chmod,
             sftp::sftp_delete, sftp::sftp_download, sftp::sftp_upload, sftp::sftp_find,
-            sftp::transfer_start, sftp::transfers_clear,
+            sftp::transfer_start, sftp::transfers_clear, sftp::transfer_resume, sftp::transfer_forget,
             tunnels::tunnels_list, tunnels::tunnel_save, tunnels::tunnel_delete,
             tunnels::tunnel_start, tunnels::tunnel_stop,
             portability::import_backup, portability::factory_reset,

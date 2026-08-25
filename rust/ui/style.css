@@ -172,6 +172,11 @@ body.resizing * { transition: none !important; }
 .tr-item .meter { width: 120px; }
 .tr-item.done .status { color: var(--accent); }
 .tr-item.error .status { color: var(--danger); }
+.tr-item .status { white-space: nowrap; }
+.tr-badge { font-size: 9px; letter-spacing: .04em; text-transform: uppercase; padding: 1px 5px;
+  border-radius: 3px; border: 1px solid var(--accent); color: var(--accent); flex: none; }
+.tr-badge.zstd { border-color: var(--ok, #6ac36a); color: var(--ok, #6ac36a); }
+.tr-resume { flex: none; padding: 1px 8px; font-size: 10px; }
 
 /* settings/tunnels pages fill the window; content stays readable via a wide inner column */
 .page { padding: 24px 32px; width: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }

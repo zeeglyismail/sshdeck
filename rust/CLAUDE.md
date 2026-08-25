@@ -61,6 +61,10 @@ everything that differs. Owner's reaction to M1: "feels super smooth".
 - [x] Close warnings: tab with live session + app quit (toggleable) — M5
 - [x] Factory reset button (wipe data dir, type-to-confirm, relaunch) — M5
 - [x] mobaconf import/export + sshdeck-backup.json import/export (`export.rs`) — M5
+- [x] **Accelerated large-file transfers** (`fast.rs`) — M6. Owner's workload is
+      14 GB DB dumps and 300 GB VHDX images.
+- [ ] `tar` streaming for directories of many small files — the other half of the
+      transfer problem (per-file SFTP round trips), NOT built yet
 - [ ] X11 forwarding via user-installed VcXsrv — post-M5, optional
 
 ## Milestones
@@ -91,7 +95,41 @@ Icons in `src-tauri/icons/` (32/128/128@2x png + multi-size ico) are generated,
 not hand-drawn; bundle config lives in `tauri.conf.json` → `bundle` (NSIS,
 installMode currentUser = no admin prompt).
 
+## Accelerated transfers (`fast.rs`, M6)
+
+The SFTP path is strictly serial — one 512 KB chunk per round trip — so its ceiling
+is `512KB / RTT` regardless of link speed (~16 MB/s at 30 ms). `fast.rs` streams over
+a plain exec channel instead: `tail -c +N | zstd -1 -c` for reads,
+`zstd -d -c | dd of=... oflag=seek_bytes conv=notrunc,sparse` for writes.
+
+- **Threshold** 64 MB, configurable in Settings (`deck.fastMinMb`), toggle
+  `deck.fastTransfer`. Below it SFTP wins, because the exec-channel setup is a
+  round trip plus a process spawn.
+- **Compression is sampled, never guessed**: 4 MB from ~10% into the file, compress
+  it, use zstd only if it shrinks below 85%. A `.vhdx` may be zero runs or packed
+  solid and only the bytes know which.
+- **Resume**: failed transfers keep `resumable`, and `transfer_resume` restarts at
+  the destination's current size. `tail -c +N` seeks, so resuming a 300 GB file at
+  280 GB is free. `transfer_forget` dismisses a row instead.
+- **Sparse**: `conv=sparse` keeps zero runs as holes — a mostly-empty 300 GB VHDX
+  lands small. Verified: 20 MB of zeros arrives as 20971520 bytes in **0 blocks**.
+- **Host→host keeps the bytes compressed end to end**, so this machine spends no CPU
+  on the codec and the relay carries only the compressed volume.
+- **Every failure falls back to SFTP** and marks the host via `fast::disable`, so a
+  restricted shell or a missing tool degrades instead of erroring. Streamed
+  transfers are size-verified afterwards, since there is no per-chunk ack.
+
 ## Gotchas learned the hard way
+
+- **A write-only exec channel DEADLOCKS.** SSH flow control delivers window
+  adjustments on the same channel; if you only write and never read, the initial
+  window is spent and nothing refills it — uploads froze at ~15 MB. Always
+  `tokio::io::split` and drain the read half concurrently (`fast::split_drain`).
+  The drain completing is also the signal that the remote command exited.
+- **Progress events must be throttled.** The old code emitted a `transfers` event
+  per 512 KB chunk — 600k events for a 300 GB file, enough to drown the webview.
+  Transfers now bump an `AtomicU64` and one 400 ms ticker turns it into events
+  (`start_ticker`), which is also where the rate and ETA come from.
 
 - **Launch the RELEASE exe for the owner** (`cargo build --release`, target/release/): the debug
   exe attaches a console window that shows harmless WebView2 log noise. Release has

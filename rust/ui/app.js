@@ -478,7 +478,13 @@ const PREFS = {
   scrollback: parseInt(localStorage.getItem("deck.scrollback")) || 50000,   // phase | blink | steady
   warnCloseTab: localStorage.getItem("deck.warnCloseTab") !== "0",
   warnQuit: localStorage.getItem("deck.warnQuit") !== "0",
+  fastTransfer: localStorage.getItem("deck.fastTransfer") !== "0",
+  fastMinMb: parseInt(localStorage.getItem("deck.fastMinMb")) || 64,
 };
+// passed to every transfer command so the Rust side knows which path to pick
+function fastOpts() {
+  return { fastEnabled: PREFS.fastTransfer, fastMinMb: PREFS.fastMinMb };
+}
 function savePref(k, v) {
   PREFS[k] = v;
   localStorage.setItem("deck." + k, typeof v === "boolean" ? (v ? "1" : "0") : String(v));
@@ -1426,6 +1432,7 @@ async function uploadLocalFiles(P, files, reload) {
       }
       st.textContent = "uploading…";
       await invoke("sftp_upload", {
+        ...fastOpts(),
         hostId: P.hostId, localPath: path, remoteDir: P.path, hostLabel: host.label,
       });
       row.remove();               // the transfers event takes over from here
@@ -1657,7 +1664,7 @@ function buildPane(paneEl, i) {
     if (!files) return;
     const host = hostById(P.hostId);
     for (const f of [].concat(files))
-      await invoke("sftp_upload", { hostId: P.hostId, localPath: f, remoteDir: P.path, hostLabel: host.label })
+      await invoke("sftp_upload", { hostId: P.hostId, localPath: f, remoteDir: P.path, hostLabel: host.label, ...fastOpts() })
         .catch(e => alert(e));
   };
   paneEl.querySelector(".dl").onclick = async () => {
@@ -1667,7 +1674,7 @@ function buildPane(paneEl, i) {
     for (const e of sel) {
       const dest = await window.__TAURI__.dialog.save({ defaultPath: e.name, title: "Save " + e.name });
       if (!dest) continue;
-      await invoke("sftp_download", { hostId: P.hostId, remotePath: joinPath(P.path, e.name), localPath: dest, hostLabel: host.label })
+      await invoke("sftp_download", { hostId: P.hostId, remotePath: joinPath(P.path, e.name), localPath: dest, hostLabel: host.label, ...fastOpts() })
         .catch(e2 => alert(e2));
     }
   };
@@ -1734,12 +1741,18 @@ function buildPane(paneEl, i) {
     for (const item of d.items)
       await invoke("transfer_start", {
         srcHostId: d.hostId, srcPath: item.path, dstHostId: P.hostId, dstDir: P.path,
-        isDir: item.is_dir, srcLabel: src.label, dstLabel: dst.label,
+        isDir: item.is_dir, srcLabel: src.label, dstLabel: dst.label, ...fastOpts(),
       }).catch(e => alert(e));
   });
 }
 
 /* transfers strip */
+function fmtEta(secs) {
+  if (!isFinite(secs) || secs <= 0) return "";
+  if (secs < 60) return Math.round(secs) + "s";
+  if (secs < 3600) return Math.floor(secs / 60) + "m " + Math.round(secs % 60) + "s";
+  return Math.floor(secs / 3600) + "h " + Math.round(secs % 3600 / 60) + "m";
+}
 listen("transfers", ev => {
   const list = ev.payload;
   const box = $("#transfers");
@@ -1752,12 +1765,42 @@ listen("transfers", ev => {
     const item = document.createElement("div");
     item.className = "tr-item " + t.status;
     const pct = t.total ? Math.round(t.done / t.total * 100) : null;
+    // the badge earns its space: it is the only way to tell whether a slow
+    // transfer fell back to SFTP or is genuinely streaming
+    const badge = t.method && t.method !== "sftp"
+      ? `<span class="tr-badge ${t.method === "fast+zstd" ? "zstd" : ""}">${esc(t.method)}</span>` : "";
+    let status;
+    if (t.status === "running") {
+      const eta = t.speed && t.total ? fmtEta((t.total - t.done) / t.speed) : "";
+      status = fmtBytes(t.done) + (t.total ? " / " + fmtBytes(t.total) : "")
+        + (t.speed ? " · " + fmtBytes(t.speed) + "/s" : "")
+        + (eta ? " · " + eta + " left" : "");
+    } else if (t.status === "error") {
+      status = "✗ " + esc(t.error || "failed");
+    } else {
+      status = "✓ " + fmtBytes(t.done);
+    }
     item.innerHTML = `
-      <span class="desc" title="${esc(t.desc)}">${esc(t.desc)}</span>
+      <span class="desc" title="${esc(t.desc)}">${esc(t.desc)}</span>${badge}
       <span class="meter"><i style="width:${pct ?? (t.status === "done" ? 100 : 30)}%"></i></span>
-      <span class="status">${t.status === "running"
-        ? fmtBytes(t.done) + (t.total ? " / " + fmtBytes(t.total) : "")
-        : t.status === "error" ? "✗ " + esc(t.error || "failed") : "✓ " + fmtBytes(t.done)}</span>`;
+      <span class="status">${status}</span>`;
+    if (t.resumable) {
+      const b = document.createElement("button");
+      b.className = "btn-ghost small tr-resume";
+      b.textContent = "Resume";
+      b.title = "Pick up from " + fmtBytes(t.done) + " instead of starting over";
+      b.onclick = () => {
+        b.disabled = true;
+        invoke("transfer_resume", { id: t.id, ...fastOpts() }).catch(e => { b.disabled = false; alert(e); });
+      };
+      item.appendChild(b);
+      const x = document.createElement("button");
+      x.className = "btn-ghost small tr-resume";
+      x.textContent = "✕";
+      x.title = "Forget this transfer";
+      x.onclick = () => invoke("transfer_forget", { id: t.id });
+      item.appendChild(x);
+    }
     el.appendChild(item);
   }
   if (anyDone) PANES.forEach(P => { if (P.hostId && P.load) P.load(); });
@@ -1853,6 +1896,14 @@ $("#tun-add").onclick = async () => {
 
 $("#pref-cursor-style").value = PREFS.cursorStyle;
 $("#pref-cursor-motion").value = PREFS.cursorMotion;
+$("#pref-fast").checked = PREFS.fastTransfer;
+$("#pref-fast").onchange = e => savePref("fastTransfer", e.target.checked);
+$("#pref-fast-min").value = PREFS.fastMinMb;
+$("#pref-fast-min").onchange = e => {
+  const v = Math.max(1, parseInt(e.target.value) || 64);
+  e.target.value = v;
+  savePref("fastMinMb", v);
+};
 $("#pref-warn-tab").checked = PREFS.warnCloseTab;
 $("#pref-warn-quit").checked = PREFS.warnQuit;
 $("#pref-cursor-style").onchange = e => { savePref("cursorStyle", e.target.value); applyCursorPrefs(); };

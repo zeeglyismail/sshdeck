@@ -90,9 +90,10 @@ lifts hosts to parent; backup JSON + mobaconf carry paths "Parent/Child" /
 
 - **X11 forwarding: rejected for the web app** — a browser has no X server. Only
   possible in a future desktop build.
-- **FTP/TFTP for speed: rejected** — insecure / wrong tool. If large-file transfer
-  speed comes up, the agreed path is streamed `cat` over an SSH exec channel
-  (scp-style) as an accelerated mode. On the roadmap, not built.
+- **FTP/TFTP for speed: rejected** — insecure / wrong tool. The agreed path was
+  streamed `cat` over an SSH exec channel, now built for the desktop app; see
+  `rust/CLAUDE.md`. The owner's real workload is 14 GB DB dumps and 300 GB VHDX
+  images, so compression + resume matter far more than the threshold.
 - **Splits & broadcast-typing: built, then REMOVED at owner's request** (UI too
   complex). Don't re-add without being asked.
 - **Bind mount `./data` over named volume** — owner moves/wipes data by folder.
@@ -109,7 +110,9 @@ lifts hosts to parent; backup JSON + mobaconf carry paths "Parent/Child" /
    cursor style options, both-direction tunnels, local terminal, reset, warnings),
    and the evaluation gate vs the pywebview fallback.
 2. Remote / dynamic (SOCKS) forwarding on top of tunnels.
-3. Transfer acceleration (exec `cat` streaming).
+3. Transfer acceleration (exec `cat` streaming) — **SHIPPED in the desktop app**
+   (`rust/src-tauri/src/fast.rs`, v1.3.0). Not ported to the web app; if the owner
+   asks for it there, the design carries over unchanged.
 4. SSH host key verification (currently `known_hosts=None` — LAN tool), TOTP login.
 
 ## Testing hygiene — NON-NEGOTIABLE

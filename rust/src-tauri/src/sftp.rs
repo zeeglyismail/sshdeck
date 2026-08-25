@@ -1,9 +1,12 @@
-﻿use crate::ssh::{pooled, Client, SshPool};
+﻿use crate::fast;
+use crate::ssh::{pooled, Client, SshPool};
 use russh::client::Handle;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::FileAttributes;
 use serde::Serialize;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -157,13 +160,40 @@ pub struct Prog {
     pub total: Option<u64>,
     pub status: String,
     pub error: Option<String>,
+    /// bytes/second over the last tick, for the UI's rate and ETA
+    pub speed: u64,
+    /// "sftp" | "fast" | "fast+zstd" — shown as a badge so it is obvious
+    /// which path a transfer actually took
+    pub method: String,
+    /// a failed transfer that can pick up where it left off
+    pub resumable: bool,
 }
 
-pub struct Transfers(pub Mutex<Vec<Prog>>, pub AtomicU32);
+/// Everything needed to restart a transfer at an offset.
+#[derive(Clone)]
+pub enum Resume {
+    Download { host_id: i64, remote: String, local: String, label: String },
+    Upload { host_id: i64, local: String, remote: String, label: String, dir: String },
+    Between {
+        src_host_id: i64,
+        src_path: String,
+        dst_host_id: i64,
+        dst_dir: String,
+        dest: String,
+        src_label: String,
+        dst_label: String,
+    },
+}
+
+pub struct Transfers(
+    pub Mutex<Vec<Prog>>,
+    pub AtomicU32,
+    pub Mutex<HashMap<u32, Resume>>,
+);
 
 impl Default for Transfers {
     fn default() -> Self {
-        Transfers(Mutex::new(Vec::new()), AtomicU32::new(0))
+        Transfers(Mutex::new(Vec::new()), AtomicU32::new(0), Mutex::new(HashMap::new()))
     }
 }
 
@@ -177,14 +207,133 @@ fn push_prog(app: &AppHandle, list: &Transfers, p: Prog) {
     let _ = app.emit("transfers", v.clone());
 }
 
+fn new_prog(id: u32, desc: String) -> Prog {
+    Prog {
+        id,
+        desc,
+        done: 0,
+        total: None,
+        status: "running".into(),
+        error: None,
+        speed: 0,
+        method: "sftp".into(),
+        resumable: false,
+    }
+}
+
+/* ---------- progress ticker ----------
+ *
+ * Transfers used to emit a `transfers` event per 512 KB chunk. On a 300 GB
+ * file that is 600k events into the webview, which drowns the UI long before
+ * the copy finishes. Instead every path just bumps an atomic counter, and one
+ * timer turns that into a few events a second, plus a live rate for the ETA.
+ */
+
+const TICK_MS: u64 = 400;
+
+fn start_ticker(app: &AppHandle, id: u32, done: Arc<AtomicU64>) -> Arc<AtomicBool> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut last = done.load(Ordering::Relaxed);
+        while !flag.load(Ordering::Relaxed) {
+            tokio::time::sleep(std::time::Duration::from_millis(TICK_MS)).await;
+            if flag.load(Ordering::Relaxed) {
+                break;
+            }
+            let cur = done.load(Ordering::Relaxed);
+            let speed = (cur.saturating_sub(last)) * 1000 / TICK_MS;
+            last = cur;
+            let list = app.state::<Transfers>();
+            let mut v = list.0.lock().unwrap();
+            if let Some(p) = v.iter_mut().find(|x| x.id == id) {
+                p.done = cur;
+                p.speed = speed;
+            }
+            let _ = app.emit("transfers", v.clone());
+        }
+    });
+    stop
+}
+
+/// Publish the final state of a transfer and stop its ticker.
+fn finish(
+    app: &AppHandle,
+    stop: &Arc<AtomicBool>,
+    mut prog: Prog,
+    done: &Arc<AtomicU64>,
+    result: Result<(), String>,
+) {
+    stop.store(true, Ordering::Relaxed);
+    prog.done = done.load(Ordering::Relaxed);
+    prog.speed = 0;
+    match result {
+        Ok(()) => {
+            prog.status = "done".into();
+            prog.resumable = false;
+        }
+        Err(e) => {
+            prog.status = "error".into();
+            // only worth offering a resume if we actually moved something
+            prog.resumable = prog.done > 0;
+            prog.error = Some(e);
+        }
+    }
+    let list = app.state::<Transfers>();
+    push_prog(app, &list, prog);
+}
+
+/* ---------- fast-path decision ---------- */
+
+/// Anything at or above this uses the streaming path. Below it the exec-channel
+/// setup (a round trip plus a process spawn) is a measurable share of the
+/// transfer and SFTP is already fine.
+const FAST_MIN: u64 = 64 * 1024 * 1024;
+
+struct Plan {
+    fast: bool,
+    compress: bool,
+    method: String,
+}
+
+impl Plan {
+    fn sftp() -> Self {
+        Plan { fast: false, compress: false, method: "sftp".into() }
+    }
+    fn stream(compress: bool) -> Self {
+        Plan {
+            fast: true,
+            compress,
+            method: if compress { "fast+zstd".into() } else { "fast".into() },
+        }
+    }
+}
+
+async fn plan_for(
+    caps: &fast::Caps,
+    size: u64,
+    enabled: bool,
+    min_bytes: u64,
+    ratio: impl std::future::Future<Output = f64>,
+) -> Plan {
+    if !enabled || size < min_bytes || !caps.can_stream() {
+        return Plan::sftp();
+    }
+    if !caps.zstd {
+        return Plan::stream(false);
+    }
+    Plan::stream(fast::worth_compressing(ratio.await))
+}
+
+/* ---------- SFTP path (fallback / small files) ---------- */
+
 async fn copy_file(
     src: &SftpSession,
     dst: &SftpSession,
     from: &str,
     to: &str,
-    app: &AppHandle,
-    list: &Transfers,
-    prog: &mut Prog,
+    done: &Arc<AtomicU64>,
 ) -> Result<(), String> {
     let mut rf = src.open(from).await.map_err(es)?;
     let mut wf = dst.create(to).await.map_err(es)?;
@@ -195,8 +344,7 @@ async fn copy_file(
             break;
         }
         wf.write_all(&buf[..n]).await.map_err(es)?;
-        prog.done += n as u64;
-        push_prog(app, list, prog.clone());
+        done.fetch_add(n as u64, Ordering::Relaxed);
     }
     wf.shutdown().await.ok();
     Ok(())
@@ -207,9 +355,7 @@ async fn copy_dir(
     dst: &SftpSession,
     from: String,
     to: String,
-    app: &AppHandle,
-    list: &Transfers,
-    prog: &mut Prog,
+    done: &Arc<AtomicU64>,
 ) -> Result<(), String> {
     dst.create_dir(&to).await.ok();
     let mut stack = vec![(from, to)];
@@ -226,17 +372,18 @@ async fn copy_dir(
                 dst.create_dir(&st).await.ok();
                 stack.push((sf, st));
             } else {
-                copy_file(src, dst, &sf, &st, app, list, prog).await?;
+                copy_file(src, dst, &sf, &st, done).await?;
             }
         }
     }
     Ok(())
 }
 
+/* ---------- host to host ---------- */
+
 #[tauri::command]
 pub async fn transfer_start(
     app: AppHandle,
-    pool: State<'_, SshPool>,
     transfers: State<'_, Transfers>,
     src_host_id: i64,
     src_path: String,
@@ -245,166 +392,431 @@ pub async fn transfer_start(
     is_dir: bool,
     src_label: String,
     dst_label: String,
+    fast_enabled: Option<bool>,
+    fast_min_mb: Option<u64>,
 ) -> Result<(), String> {
     let id = transfers.1.fetch_add(1, Ordering::SeqCst) + 1;
-    let src_spec = crate::build_spec(&app, src_host_id)?;
-    let dst_spec = crate::build_spec(&app, dst_host_id)?;
-    let src_h = pooled(&pool, src_host_id, src_spec).await?;
-    let dst_h = pooled(&pool, dst_host_id, dst_spec).await?;
-
     let name = src_path.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
     let dest = format!("{}/{}", dst_dir.trim_end_matches('/'), name);
-    let desc = format!("{src_label}:{src_path} â†’ {dst_label}:{dst_dir}");
+    transfers.2.lock().unwrap().insert(
+        id,
+        Resume::Between {
+            src_host_id,
+            src_path: src_path.clone(),
+            dst_host_id,
+            dst_dir: dst_dir.clone(),
+            dest: dest.clone(),
+            src_label: src_label.clone(),
+            dst_label: dst_label.clone(),
+        },
+    );
+    let desc = format!("{src_label}:{src_path} \u{2192} {dst_label}:{dst_dir}");
+    run_between(
+        app, id, src_host_id, src_path, dst_host_id, dest, is_dir, desc, 0,
+        opts(fast_enabled, fast_min_mb),
+    )
+    .await
+}
 
-    let app2 = app.clone();
+fn opts(enabled: Option<bool>, min_mb: Option<u64>) -> (bool, u64) {
+    (
+        enabled.unwrap_or(true),
+        min_mb.map(|m| m * 1024 * 1024).unwrap_or(FAST_MIN),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_between(
+    app: AppHandle,
+    id: u32,
+    src_host_id: i64,
+    src_path: String,
+    dst_host_id: i64,
+    dest: String,
+    is_dir: bool,
+    desc: String,
+    offset: u64,
+    (fast_on, min_bytes): (bool, u64),
+) -> Result<(), String> {
+    let pool = app.state::<SshPool>();
+    let src_h = pooled(&pool, src_host_id, crate::build_spec(&app, src_host_id)?).await?;
+    let dst_h = pooled(&pool, dst_host_id, crate::build_spec(&app, dst_host_id)?).await?;
+
     tauri::async_runtime::spawn(async move {
-        let list = app2.state::<Transfers>();
-        let mut prog = Prog { id, desc, done: 0, total: None, status: "running".into(), error: None };
-        push_prog(&app2, &list, prog.clone());
-        let result: Result<(), String> = async {
-            let src = open_sftp(&src_h).await?;
-            let dst = open_sftp(&dst_h).await?;
-            if is_dir {
-                copy_dir(&src, &dst, src_path.clone(), dest.clone(), &app2, &list, &mut prog).await
-            } else {
-                if let Ok(m) = src.metadata(&src_path).await {
-                    prog.total = m.size;
+        let mut prog = new_prog(id, desc);
+        prog.done = offset;
+        let done = Arc::new(AtomicU64::new(offset));
+        let cache = app.state::<fast::CapsCache>();
+
+        let size = if is_dir { 0 } else { fast::remote_size(&src_h, &src_path).await.unwrap_or(0) };
+        let plan = if is_dir {
+            // directory trees stay on SFTP for now: the win there is bundling
+            // many small files with tar, which is a separate change
+            Plan::sftp()
+        } else {
+            let sc = fast::caps(&cache, src_host_id, &src_h).await;
+            let dc = fast::caps(&cache, dst_host_id, &dst_h).await;
+            let both = fast::Caps {
+                zstd: sc.zstd && dc.zstd,
+                gnu_dd: dc.gnu_dd,
+                tail: sc.tail,
+            };
+            plan_for(&both, size, fast_on, min_bytes, fast::remote_ratio(&src_h, &src_path, size)).await
+        };
+        prog.total = if is_dir { None } else { Some(size) };
+        prog.method = plan.method.clone();
+        {
+            let list = app.state::<Transfers>();
+            push_prog(&app, &list, prog.clone());
+        }
+        let stop = start_ticker(&app, id, done.clone());
+
+        let mut result = if plan.fast {
+            fast::host_to_host(&src_h, &dst_h, &src_path, &dest, offset, plan.compress, done.clone()).await
+        } else {
+            Err("__sftp__".into())
+        };
+        if plan.fast {
+            result = verify_remote(&dst_h, &dest, size, result).await;
+        }
+
+        // any fast-path failure falls back to SFTP rather than surfacing an error
+        if plan.fast && result.is_err() {
+            fast::disable(&cache, dst_host_id).await;
+            done.store(0, Ordering::Relaxed);
+            prog.method = "sftp".into();
+            result = Err("__sftp__".into());
+        }
+        if result.as_ref().err().map(|e| e == "__sftp__").unwrap_or(false) {
+            let list = app.state::<Transfers>();
+            prog.method = "sftp".into();
+            push_prog(&app, &list, prog.clone());
+            result = async {
+                let src = open_sftp(&src_h).await?;
+                let dst = open_sftp(&dst_h).await?;
+                if is_dir {
+                    copy_dir(&src, &dst, src_path.clone(), dest.clone(), &done).await
+                } else {
+                    copy_file(&src, &dst, &src_path, &dest, &done).await
                 }
-                copy_file(&src, &dst, &src_path, &dest, &app2, &list, &mut prog).await
             }
+            .await;
         }
-        .await;
-        match result {
-            Ok(()) => prog.status = "done".into(),
-            Err(e) => {
-                prog.status = "error".into();
-                prog.error = Some(e);
-            }
-        }
-        push_prog(&app2, &list, prog);
+        finish(&app, &stop, prog, &done, result);
     });
     Ok(())
 }
 
-#[tauri::command]
-pub fn transfers_clear(app: AppHandle, transfers: State<'_, Transfers>) {
-    let mut v = transfers.0.lock().unwrap();
-    v.retain(|t| t.status == "running");
-    let _ = app.emit("transfers", v.clone());
+/// A streamed transfer has no per-chunk acknowledgement, so confirm the
+/// destination really ended up the size we expected before calling it done.
+async fn verify_remote(
+    h: &Handle<Client>,
+    path: &str,
+    expect: u64,
+    result: Result<(), String>,
+) -> Result<(), String> {
+    result?;
+    if expect == 0 {
+        return Ok(());
+    }
+    match fast::remote_size(h, path).await {
+        Some(n) if n == expect => Ok(()),
+        Some(n) => Err(format!("size mismatch: got {n} of {expect} bytes")),
+        None => Err("destination file missing after transfer".into()),
+    }
 }
 
-/* ---------- local upload / download ---------- */
+#[tauri::command]
+pub fn transfers_clear(app: AppHandle, transfers: State<'_, Transfers>) {
+    let keep: Vec<u32> = {
+        let mut v = transfers.0.lock().unwrap();
+        v.retain(|t| t.status == "running" || (t.status == "error" && t.resumable));
+        v.iter().map(|t| t.id).collect()
+    };
+    transfers.2.lock().unwrap().retain(|k, _| keep.contains(k));
+    let v = transfers.0.lock().unwrap().clone();
+    let _ = app.emit("transfers", v);
+}
+
+/// Drop a failed transfer the owner has decided not to resume. Without this,
+/// resumable rows would sit in the strip forever, since `transfers_clear`
+/// deliberately keeps them.
+#[tauri::command]
+pub fn transfer_forget(app: AppHandle, transfers: State<'_, Transfers>, id: u32) {
+    transfers.0.lock().unwrap().retain(|t| t.id != id);
+    transfers.2.lock().unwrap().remove(&id);
+    let v = transfers.0.lock().unwrap().clone();
+    let _ = app.emit("transfers", v);
+}
+
+/// Restart a failed transfer from wherever the destination got to. For a
+/// 300 GB image that died at 280 GB this is the difference between five
+/// minutes and five hours.
+#[tauri::command]
+pub async fn transfer_resume(
+    app: AppHandle,
+    transfers: State<'_, Transfers>,
+    id: u32,
+    fast_enabled: Option<bool>,
+    fast_min_mb: Option<u64>,
+) -> Result<(), String> {
+    let spec = transfers
+        .2
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or("this transfer can no longer be resumed")?;
+    let o = opts(fast_enabled, fast_min_mb);
+    let pool = app.state::<SshPool>();
+    match spec {
+        Resume::Download { host_id, remote, local, label } => {
+            let offset = tokio::fs::metadata(&local).await.map(|m| m.len()).unwrap_or(0);
+            let desc = format!("{label}:{remote} \u{2192} {local}");
+            run_download(app.clone(), id, host_id, remote, local, desc, offset, o).await
+        }
+        Resume::Upload { host_id, local, remote, label, dir } => {
+            let h = pooled(&pool, host_id, crate::build_spec(&app, host_id)?).await?;
+            let offset = fast::remote_size(&h, &remote).await.unwrap_or(0);
+            let name = remote.rsplit('/').next().unwrap_or("").to_string();
+            let desc = format!("{name} \u{2192} {label}:{dir}");
+            run_upload(app.clone(), id, host_id, local, remote, dir, label, desc, offset, o).await
+        }
+        Resume::Between { src_host_id, src_path, dst_host_id, dst_dir, dest, src_label, dst_label } => {
+            let h = pooled(&pool, dst_host_id, crate::build_spec(&app, dst_host_id)?).await?;
+            let offset = fast::remote_size(&h, &dest).await.unwrap_or(0);
+            let desc = format!("{src_label}:{src_path} \u{2192} {dst_label}:{dst_dir}");
+            run_between(app.clone(), id, src_host_id, src_path, dst_host_id, dest, false, desc, offset, o).await
+        }
+    }
+}
+
+/* ---------- local download ---------- */
 
 #[tauri::command]
 pub async fn sftp_download(
     app: AppHandle,
-    pool: State<'_, SshPool>,
     transfers: State<'_, Transfers>,
     host_id: i64,
     remote_path: String,
     local_path: String,
     host_label: String,
+    fast_enabled: Option<bool>,
+    fast_min_mb: Option<u64>,
 ) -> Result<(), String> {
     let id = transfers.1.fetch_add(1, Ordering::SeqCst) + 1;
-    let spec = crate::build_spec(&app, host_id)?;
-    let handle = pooled(&pool, host_id, spec).await?;
-    let app2 = app.clone();
+    transfers.2.lock().unwrap().insert(
+        id,
+        Resume::Download {
+            host_id,
+            remote: remote_path.clone(),
+            local: local_path.clone(),
+            label: host_label.clone(),
+        },
+    );
+    let desc = format!("{host_label}:{remote_path} \u{2192} {local_path}");
+    run_download(app, id, host_id, remote_path, local_path, desc, 0, opts(fast_enabled, fast_min_mb)).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_download(
+    app: AppHandle,
+    id: u32,
+    host_id: i64,
+    remote_path: String,
+    local_path: String,
+    desc: String,
+    offset: u64,
+    (fast_on, min_bytes): (bool, u64),
+) -> Result<(), String> {
+    let pool = app.state::<SshPool>();
+    let handle = pooled(&pool, host_id, crate::build_spec(&app, host_id)?).await?;
     tauri::async_runtime::spawn(async move {
-        let list = app2.state::<Transfers>();
-        let mut prog = Prog {
-            id,
-            desc: format!("{host_label}:{remote_path} â†’ {local_path}"),
-            done: 0, total: None, status: "running".into(), error: None,
-        };
-        push_prog(&app2, &list, prog.clone());
-        let result: Result<(), String> = async {
-            let sftp = open_sftp(&handle).await?;
-            if let Ok(m) = sftp.metadata(&remote_path).await {
-                prog.total = m.size;
-            }
-            let mut rf = sftp.open(&remote_path).await.map_err(es)?;
-            let mut wf = tokio::fs::File::create(&local_path).await.map_err(es)?;
-            let mut buf = vec![0u8; 512 * 1024];
-            loop {
-                let n = rf.read(&mut buf).await.map_err(es)?;
-                if n == 0 {
-                    break;
-                }
-                wf.write_all(&buf[..n]).await.map_err(es)?;
-                prog.done += n as u64;
-                push_prog(&app2, &list, prog.clone());
-            }
-            wf.flush().await.ok();
-            Ok(())
-        }
+        let mut prog = new_prog(id, desc);
+        prog.done = offset;
+        let done = Arc::new(AtomicU64::new(offset));
+        let cache = app.state::<fast::CapsCache>();
+
+        let size = fast::remote_size(&handle, &remote_path).await.unwrap_or(0);
+        let caps = fast::caps(&cache, host_id, &handle).await;
+        let plan = plan_for(
+            &caps, size, fast_on, min_bytes,
+            fast::remote_ratio(&handle, &remote_path, size),
+        )
         .await;
-        match result {
-            Ok(()) => prog.status = "done".into(),
-            Err(e) => { prog.status = "error".into(); prog.error = Some(e); }
+        prog.total = Some(size);
+        prog.method = plan.method.clone();
+        {
+            let list = app.state::<Transfers>();
+            push_prog(&app, &list, prog.clone());
         }
-        push_prog(&app2, &list, prog);
+        let stop = start_ticker(&app, id, done.clone());
+
+        let mut result = if plan.fast {
+            let r = fast::download(&handle, &remote_path, &local_path, offset, plan.compress, done.clone()).await;
+            verify_local(&local_path, size, r).await
+        } else {
+            Err("__sftp__".into())
+        };
+        if plan.fast && result.is_err() {
+            fast::disable(&cache, host_id).await;
+            done.store(0, Ordering::Relaxed);
+            result = Err("__sftp__".into());
+        }
+        if result.as_ref().err().map(|e| e == "__sftp__").unwrap_or(false) {
+            prog.method = "sftp".into();
+            let list = app.state::<Transfers>();
+            push_prog(&app, &list, prog.clone());
+            result = async {
+                let sftp = open_sftp(&handle).await?;
+                let mut rf = sftp.open(&remote_path).await.map_err(es)?;
+                let mut wf = tokio::fs::File::create(&local_path).await.map_err(es)?;
+                let mut buf = vec![0u8; 512 * 1024];
+                loop {
+                    let n = rf.read(&mut buf).await.map_err(es)?;
+                    if n == 0 {
+                        break;
+                    }
+                    wf.write_all(&buf[..n]).await.map_err(es)?;
+                    done.fetch_add(n as u64, Ordering::Relaxed);
+                }
+                wf.flush().await.ok();
+                Ok(())
+            }
+            .await;
+        }
+        finish(&app, &stop, prog, &done, result);
     });
     Ok(())
 }
 
+async fn verify_local(path: &str, expect: u64, result: Result<(), String>) -> Result<(), String> {
+    result?;
+    if expect == 0 {
+        return Ok(());
+    }
+    match tokio::fs::metadata(path).await {
+        Ok(m) if m.len() == expect => Ok(()),
+        Ok(m) => Err(format!("size mismatch: got {} of {} bytes", m.len(), expect)),
+        Err(e) => Err(es(e)),
+    }
+}
+
+/* ---------- local upload ---------- */
+
 #[tauri::command]
 pub async fn sftp_upload(
     app: AppHandle,
-    pool: State<'_, SshPool>,
     transfers: State<'_, Transfers>,
     host_id: i64,
     local_path: String,
     remote_dir: String,
     host_label: String,
+    fast_enabled: Option<bool>,
+    fast_min_mb: Option<u64>,
 ) -> Result<(), String> {
     let id = transfers.1.fetch_add(1, Ordering::SeqCst) + 1;
-    let spec = crate::build_spec(&app, host_id)?;
-    let handle = pooled(&pool, host_id, spec).await?;
     let name = std::path::Path::new(&local_path)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .ok_or("bad local path")?;
     let dest = format!("{}/{}", remote_dir.trim_end_matches('/'), name);
-    let app2 = app.clone();
+    transfers.2.lock().unwrap().insert(
+        id,
+        Resume::Upload {
+            host_id,
+            local: local_path.clone(),
+            remote: dest.clone(),
+            label: host_label.clone(),
+            dir: remote_dir.clone(),
+        },
+    );
+    // show the file name, not the drag-and-drop spool path
+    let desc = format!("{name} \u{2192} {host_label}:{remote_dir}");
+    run_upload(
+        app, id, host_id, local_path, dest, remote_dir, host_label, desc, 0,
+        opts(fast_enabled, fast_min_mb),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_upload(
+    app: AppHandle,
+    id: u32,
+    host_id: i64,
+    local_path: String,
+    dest: String,
+    _remote_dir: String,
+    _host_label: String,
+    desc: String,
+    offset: u64,
+    (fast_on, min_bytes): (bool, u64),
+) -> Result<(), String> {
+    let pool = app.state::<SshPool>();
+    let handle = pooled(&pool, host_id, crate::build_spec(&app, host_id)?).await?;
     tauri::async_runtime::spawn(async move {
-        let list = app2.state::<Transfers>();
-        let mut prog = Prog {
-            id,
-            desc: format!("{name} â†’ {host_label}:{remote_dir}"),   // file name, not the temp spool path
-            done: 0, total: None, status: "running".into(), error: None,
+        let mut prog = new_prog(id, desc);
+        prog.done = offset;
+        let done = Arc::new(AtomicU64::new(offset));
+        let cache = app.state::<fast::CapsCache>();
+
+        let size = tokio::fs::metadata(&local_path).await.map(|m| m.len()).unwrap_or(0);
+        let caps = fast::caps(&cache, host_id, &handle).await;
+        let plan = plan_for(&caps, size, fast_on, min_bytes, fast::local_ratio(&local_path, size)).await;
+        prog.total = Some(size);
+        prog.method = plan.method.clone();
+        {
+            let list = app.state::<Transfers>();
+            push_prog(&app, &list, prog.clone());
+        }
+        let stop = start_ticker(&app, id, done.clone());
+
+        let mut result = if plan.fast {
+            let r = fast::upload(&handle, &local_path, &dest, offset, plan.compress, done.clone()).await;
+            verify_remote(&handle, &dest, size, r).await
+        } else {
+            Err("__sftp__".into())
         };
-        push_prog(&app2, &list, prog.clone());
-        let result: Result<(), String> = async {
-            let meta = tokio::fs::metadata(&local_path).await.map_err(es)?;
-            prog.total = Some(meta.len());
-            let sftp = open_sftp(&handle).await?;
-            let mut rf = tokio::fs::File::open(&local_path).await.map_err(es)?;
-            let mut wf = sftp.create(&dest).await.map_err(es)?;
-            let mut buf = vec![0u8; 512 * 1024];
-            loop {
-                let n = rf.read(&mut buf).await.map_err(es)?;
-                if n == 0 {
-                    break;
+        if plan.fast && result.is_err() {
+            fast::disable(&cache, host_id).await;
+            done.store(0, Ordering::Relaxed);
+            result = Err("__sftp__".into());
+        }
+        if result.as_ref().err().map(|e| e == "__sftp__").unwrap_or(false) {
+            prog.method = "sftp".into();
+            let list = app.state::<Transfers>();
+            push_prog(&app, &list, prog.clone());
+            result = async {
+                let sftp = open_sftp(&handle).await?;
+                let mut rf = tokio::fs::File::open(&local_path).await.map_err(es)?;
+                let mut wf = sftp.create(&dest).await.map_err(es)?;
+                let mut buf = vec![0u8; 512 * 1024];
+                loop {
+                    let n = rf.read(&mut buf).await.map_err(es)?;
+                    if n == 0 {
+                        break;
+                    }
+                    wf.write_all(&buf[..n]).await.map_err(es)?;
+                    done.fetch_add(n as u64, Ordering::Relaxed);
                 }
-                wf.write_all(&buf[..n]).await.map_err(es)?;
-                prog.done += n as u64;
-                push_prog(&app2, &list, prog.clone());
+                wf.shutdown().await.ok();
+                Ok(())
             }
-            wf.shutdown().await.ok();
-            Ok(())
+            .await;
         }
-        .await;
-        match result {
-            Ok(()) => prog.status = "done".into(),
-            Err(e) => { prog.status = "error".into(); prog.error = Some(e); }
+        let ok = result.is_ok();
+        finish(&app, &stop, prog, &done, result);
+        // if this came from an OS drag and drop, drop the temp spool now that
+        // the transfer is over — the frontend cannot, this task is detached.
+        // On failure the spool is kept so the transfer stays resumable.
+        if ok {
+            crate::stash::cleanup_if_spool(&local_path);
         }
-        // if this came from an OS drag & drop, delete the temp spool now that the
-        // transfer is finished — the frontend can't, this task is detached
-        crate::stash::cleanup_if_spool(&local_path);
-        push_prog(&app2, &list, prog);
     });
     Ok(())
 }
+
 
 /* ---------- search (server-side `find`) ---------- */
 
