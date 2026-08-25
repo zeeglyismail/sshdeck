@@ -108,7 +108,11 @@ a plain exec channel instead: `tail -c +N | zstd -1 -c` for reads,
 - **Compression is sampled, never guessed**: 4 MB from ~10% into the file, compress
   it, use zstd only if it shrinks below 85%. A `.vhdx` may be zero runs or packed
   solid and only the bytes know which.
-- **Resume**: failed transfers keep `resumable`, and `transfer_resume` restarts at
+- **Pause** (`transfer_pause`) sets an `AtomicBool` the copy loops watch; it is not
+  an error, it lands the row as `paused` + resumable. On the compressed upload path
+  the encoder still calls `finish()` so the remote decoder gets a complete frame and
+  writes out everything sent — resuming from a torn frame would leave a gap.
+- **Resume**: failed or paused transfers keep `resumable`, and `transfer_resume` restarts at
   the destination's current size. `tail -c +N` seeks, so resuming a 300 GB file at
   280 GB is free. `transfer_forget` dismisses a row instead.
 - **Sparse**: `conv=sparse` keeps zero runs as holes — a mostly-empty 300 GB VHDX
@@ -126,6 +130,13 @@ a plain exec channel instead: `tail -c +N | zstd -1 -c` for reads,
   window is spent and nothing refills it — uploads froze at ~15 MB. Always
   `tokio::io::split` and drain the read half concurrently (`fast::split_drain`).
   The drain completing is also the signal that the remote command exited.
+- **Two transfers must never share a destination.** Dropping the same file twice
+  gave both `dd` writes one path; the second `: > file` truncated under the first
+  and the channel died with "Channel send error". `claim_dest` refuses the second.
+- **WebView2 draws its OWN password reveal eye** once the field has content, next to
+  ours — looks like a duplicate icon bug. Killed with `::-ms-reveal { display:none }`.
+- **`::-webkit-scrollbar-corner` defaults to solid white** where a vertical and a
+  horizontal scrollbar meet. Always style it alongside track and thumb.
 - **Progress events must be throttled.** The old code emitted a `transfers` event
   per 512 KB chunk — 600k events for a 300 GB file, enough to drown the webview.
   Transfers now bump an `AtomicU64` and one 400 ms ticker turns it into events

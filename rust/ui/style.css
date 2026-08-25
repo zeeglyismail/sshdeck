@@ -176,7 +176,9 @@ body.resizing * { transition: none !important; }
 .tr-badge { font-size: 9px; letter-spacing: .04em; text-transform: uppercase; padding: 1px 5px;
   border-radius: 3px; border: 1px solid var(--accent); color: var(--accent); flex: none; }
 .tr-badge.zstd { border-color: var(--ok, #6ac36a); color: var(--ok, #6ac36a); }
-.tr-resume { flex: none; padding: 1px 8px; font-size: 10px; }
+.tr-act { flex: none; padding: 1px 8px; font-size: 10px; white-space: nowrap; }
+.tr-x { padding: 1px 6px; }
+.tr-item.paused .status { color: var(--muted, #9aa0a6); }
 
 /* settings/tunnels pages fill the window; content stays readable via a wide inner column */
 .page { padding: 24px 32px; width: 100%; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
@@ -289,3 +291,10 @@ body[data-cursor-motion="phase"] .xterm.focus .xterm-cursor.xterm-cursor-bar::af
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #3c3c40; border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
+/* where a vertical and a horizontal bar meet; unstyled it renders solid white */
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* WebView2 adds its OWN eye to password fields once they have content, which
+   lands next to ours and looks like a duplicate. Ours is the themed one. */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear { display: none; width: 0; height: 0; }

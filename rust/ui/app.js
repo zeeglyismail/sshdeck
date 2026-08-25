@@ -1753,6 +1753,14 @@ function fmtEta(secs) {
   if (secs < 3600) return Math.floor(secs / 60) + "m " + Math.round(secs % 60) + "s";
   return Math.floor(secs / 3600) + "h " + Math.round(secs % 3600 / 60) + "m";
 }
+function trButton(cls, label, title, fn) {
+  const b = document.createElement("button");
+  b.className = "btn-ghost small " + cls;
+  b.textContent = label;
+  b.title = title;
+  b.onclick = () => fn(b);
+  return b;
+}
 listen("transfers", ev => {
   const list = ev.payload;
   const box = $("#transfers");
@@ -1766,40 +1774,42 @@ listen("transfers", ev => {
     item.className = "tr-item " + t.status;
     const pct = t.total ? Math.round(t.done / t.total * 100) : null;
     // the badge earns its space: it is the only way to tell whether a slow
-    // transfer fell back to SFTP or is genuinely streaming
+    // transfer is streaming or quietly fell back to SFTP
     const badge = t.method && t.method !== "sftp"
       ? `<span class="tr-badge ${t.method === "fast+zstd" ? "zstd" : ""}">${esc(t.method)}</span>` : "";
+    // average over the whole transfer, so a finished row still reports how fast it went
+    const avg = t.elapsed_ms > 500 ? t.done / (t.elapsed_ms / 1000) : 0;
     let status;
     if (t.status === "running") {
       const eta = t.speed && t.total ? fmtEta((t.total - t.done) / t.speed) : "";
       status = fmtBytes(t.done) + (t.total ? " / " + fmtBytes(t.total) : "")
-        + (t.speed ? " · " + fmtBytes(t.speed) + "/s" : "")
-        + (eta ? " · " + eta + " left" : "");
+        + (t.speed ? " \u00b7 " + fmtBytes(t.speed) + "/s" : "")
+        + (eta ? " \u00b7 " + eta + " left" : "");
     } else if (t.status === "error") {
-      status = "✗ " + esc(t.error || "failed");
+      status = "\u2717 " + esc(t.error || "failed");
+    } else if (t.status === "paused") {
+      status = "\u23f8 paused at " + fmtBytes(t.done) + (t.total ? " / " + fmtBytes(t.total) : "");
     } else {
-      status = "✓ " + fmtBytes(t.done);
+      status = "\u2713 " + fmtBytes(t.done) + (avg ? " \u00b7 " + fmtBytes(avg) + "/s avg" : "");
     }
     item.innerHTML = `
       <span class="desc" title="${esc(t.desc)}">${esc(t.desc)}</span>${badge}
       <span class="meter"><i style="width:${pct ?? (t.status === "done" ? 100 : 30)}%"></i></span>
       <span class="status">${status}</span>`;
+    if (t.status === "running") {
+      item.appendChild(trButton("tr-act", "\u23f8 Pause", "Stop now and keep what has transferred, so Resume can finish it later",
+        b => { b.disabled = true; invoke("transfer_pause", { id: t.id }); }));
+    }
     if (t.resumable) {
-      const b = document.createElement("button");
-      b.className = "btn-ghost small tr-resume";
-      b.textContent = "Resume";
-      b.title = "Pick up from " + fmtBytes(t.done) + " instead of starting over";
-      b.onclick = () => {
-        b.disabled = true;
-        invoke("transfer_resume", { id: t.id, ...fastOpts() }).catch(e => { b.disabled = false; alert(e); });
-      };
-      item.appendChild(b);
-      const x = document.createElement("button");
-      x.className = "btn-ghost small tr-resume";
-      x.textContent = "✕";
-      x.title = "Forget this transfer";
-      x.onclick = () => invoke("transfer_forget", { id: t.id });
-      item.appendChild(x);
+      item.appendChild(trButton("tr-act", "\u25b6 Resume", "Pick up from " + fmtBytes(t.done) + " instead of starting over",
+        b => {
+          b.disabled = true;
+          invoke("transfer_resume", { id: t.id, ...fastOpts() }).catch(e => { b.disabled = false; alert(e); });
+        }));
+    }
+    if (t.status !== "running") {
+      item.appendChild(trButton("tr-act tr-x", "\u2715", "Remove this row",
+        () => invoke("transfer_forget", { id: t.id })));
     }
     el.appendChild(item);
   }

@@ -26,6 +26,19 @@ fn es<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
+/// Flag a transfer watches so it can be paused. Pausing is not an error: the
+/// bytes already written stay put and `transfer_resume` picks up from the
+/// destination size, which is what makes it safe on a 300 GB image.
+pub type Cancel = Arc<std::sync::atomic::AtomicBool>;
+
+/// Sentinel error meaning "stopped on purpose" — callers must not treat this
+/// as a fast-path failure or they would fall back to SFTP and start over.
+pub const PAUSED: &str = "__paused__";
+
+pub fn stopped(c: &Cancel) -> bool {
+    c.load(Ordering::Relaxed)
+}
+
 /// Single-quote a path for `sh -c`.
 fn shq(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
@@ -269,6 +282,7 @@ pub async fn download(
     offset: u64,
     compress: bool,
     done: Arc<AtomicU64>,
+    cancel: Cancel,
 ) -> Result<(), String> {
     let mut stream = open_exec(h, &read_cmd(remote, offset, compress)).await?;
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(PIPE_CHUNKS);
@@ -303,7 +317,12 @@ pub async fn download(
     });
 
     let mut buf = vec![0u8; READ_BUF];
+    let mut paused = false;
     loop {
+        if stopped(&cancel) {
+            paused = true;
+            break;
+        }
         let n = stream.read(&mut buf).await.map_err(es)?;
         if n == 0 {
             break;
@@ -312,8 +331,13 @@ pub async fn download(
             break; // writer died; its error is the useful one
         }
     }
+    // drop the sender first so the writer flushes and closes the file before we
+    // report — otherwise a resume would read a stale size
     drop(tx);
     writer.await.map_err(es)??;
+    if paused {
+        return Err(PAUSED.into());
+    }
     Ok(())
 }
 
@@ -326,6 +350,7 @@ pub async fn upload(
     offset: u64,
     compress: bool,
     done: Arc<AtomicU64>,
+    cancel: Cancel,
 ) -> Result<(), String> {
     let stream = open_exec(h, &write_cmd(remote, offset, compress)).await?;
     let (mut stream, drain) = split_drain(stream);
@@ -333,6 +358,7 @@ pub async fn upload(
 
     let lp = local.to_string();
     let counter = done.clone();
+    let stop_flag = cancel.clone();
     let reader = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let mut f = std::fs::File::open(&lp).map_err(es)?;
         f.seek(SeekFrom::Start(offset)).map_err(es)?;
@@ -340,6 +366,9 @@ pub async fn upload(
         if compress {
             let mut enc = zstd::stream::write::Encoder::new(ChanWriter(tx), 1).map_err(es)?;
             loop {
+                if stopped(&stop_flag) {
+                    break;
+                }
                 let n = std::io::Read::read(&mut f, &mut buf).map_err(es)?;
                 if n == 0 {
                     break;
@@ -347,10 +376,15 @@ pub async fn upload(
                 enc.write_all(&buf[..n]).map_err(es)?;
                 counter.fetch_add(n as u64, Ordering::Relaxed);
             }
+            // close the frame cleanly even when pausing, so the remote decoder
+            // writes out everything we sent instead of erroring on a torn frame
             enc.finish().map_err(es)?;
         } else {
             let mut w = ChanWriter(tx);
             loop {
+                if stopped(&stop_flag) {
+                    break;
+                }
                 let n = std::io::Read::read(&mut f, &mut buf).map_err(es)?;
                 if n == 0 {
                     break;
@@ -371,6 +405,9 @@ pub async fn upload(
     stream.shutdown().await.map_err(es)?;
     // wait for the remote command to exit before we trust the result
     let _ = drain.await;
+    if stopped(&cancel) {
+        return Err(PAUSED.into());
+    }
     Ok(())
 }
 
@@ -387,11 +424,17 @@ pub async fn host_to_host(
     offset: u64,
     compress: bool,
     done: Arc<AtomicU64>,
+    cancel: Cancel,
 ) -> Result<(), String> {
     let mut rs = open_exec(src, &read_cmd(src_path, offset, compress)).await?;
     let (mut ws, drain) = split_drain(open_exec(dst, &write_cmd(dst_path, offset, compress)).await?);
     let mut buf = vec![0u8; READ_BUF];
+    let mut paused = false;
     loop {
+        if stopped(&cancel) {
+            paused = true;
+            break;
+        }
         let n = rs.read(&mut buf).await.map_err(es)?;
         if n == 0 {
             break;
@@ -402,5 +445,8 @@ pub async fn host_to_host(
     ws.flush().await.ok();
     ws.shutdown().await.map_err(es)?;
     let _ = drain.await;
+    if paused {
+        return Err(PAUSED.into());
+    }
     Ok(())
 }

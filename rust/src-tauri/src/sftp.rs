@@ -4,10 +4,11 @@ use russh::client::Handle;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::FileAttributes;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -165,8 +166,10 @@ pub struct Prog {
     /// "sftp" | "fast" | "fast+zstd" — shown as a badge so it is obvious
     /// which path a transfer actually took
     pub method: String,
-    /// a failed transfer that can pick up where it left off
+    /// a failed or paused transfer that can pick up where it left off
     pub resumable: bool,
+    /// wall clock spent so far, so the UI can show an average rate once done
+    pub elapsed_ms: u64,
 }
 
 /// Everything needed to restart a transfer at an offset.
@@ -185,20 +188,20 @@ pub enum Resume {
     },
 }
 
-pub struct Transfers(
-    pub Mutex<Vec<Prog>>,
-    pub AtomicU32,
-    pub Mutex<HashMap<u32, Resume>>,
-);
-
-impl Default for Transfers {
-    fn default() -> Self {
-        Transfers(Mutex::new(Vec::new()), AtomicU32::new(0), Mutex::new(HashMap::new()))
-    }
+#[derive(Default)]
+pub struct Transfers {
+    pub list: Mutex<Vec<Prog>>,
+    pub seq: AtomicU32,
+    pub resume: Mutex<HashMap<u32, Resume>>,
+    /// per transfer pause flags, checked inside the copy loops
+    pub cancel: Mutex<HashMap<u32, fast::Cancel>>,
+    /// destinations currently being written, so two transfers cannot fight
+    /// over the same path
+    pub dests: Mutex<HashSet<String>>,
 }
 
 fn push_prog(app: &AppHandle, list: &Transfers, p: Prog) {
-    let mut v = list.0.lock().unwrap();
+    let mut v = list.list.lock().unwrap();
     if let Some(slot) = v.iter_mut().find(|x| x.id == p.id) {
         *slot = p;
     } else {
@@ -218,7 +221,19 @@ fn new_prog(id: u32, desc: String) -> Prog {
         speed: 0,
         method: "sftp".into(),
         resumable: false,
+        elapsed_ms: 0,
     }
+}
+
+/// Claim a destination path. Returns false if another live transfer already
+/// owns it. Dropping the same file twice used to leave both writes racing on
+/// one path, which killed the channel mid stream.
+fn claim_dest(t: &Transfers, key: &str) -> bool {
+    t.dests.lock().unwrap().insert(key.to_string())
+}
+
+fn release_dest(app: &AppHandle, key: &str) {
+    app.state::<Transfers>().dests.lock().unwrap().remove(key);
 }
 
 /* ---------- progress ticker ----------
@@ -231,25 +246,30 @@ fn new_prog(id: u32, desc: String) -> Prog {
 
 const TICK_MS: u64 = 400;
 
-fn start_ticker(app: &AppHandle, id: u32, done: Arc<AtomicU64>) -> Arc<AtomicBool> {
+fn start_ticker(app: &AppHandle, id: u32, done: Arc<AtomicU64>, t0: Instant) -> Arc<AtomicBool> {
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut last = done.load(Ordering::Relaxed);
+        let mut ema = 0f64;
         while !flag.load(Ordering::Relaxed) {
             tokio::time::sleep(std::time::Duration::from_millis(TICK_MS)).await;
             if flag.load(Ordering::Relaxed) {
                 break;
             }
             let cur = done.load(Ordering::Relaxed);
-            let speed = (cur.saturating_sub(last)) * 1000 / TICK_MS;
+            let inst = (cur.saturating_sub(last)) as f64 * 1000.0 / TICK_MS as f64;
             last = cur;
+            // smoothed, so a tick that lands during a stall does not blank the
+            // rate and ETA out of the row
+            ema = if ema == 0.0 { inst } else { ema * 0.6 + inst * 0.4 };
             let list = app.state::<Transfers>();
-            let mut v = list.0.lock().unwrap();
+            let mut v = list.list.lock().unwrap();
             if let Some(p) = v.iter_mut().find(|x| x.id == id) {
                 p.done = cur;
-                p.speed = speed;
+                p.speed = ema as u64;
+                p.elapsed_ms = t0.elapsed().as_millis() as u64;
             }
             let _ = app.emit("transfers", v.clone());
         }
@@ -258,20 +278,28 @@ fn start_ticker(app: &AppHandle, id: u32, done: Arc<AtomicU64>) -> Arc<AtomicBoo
 }
 
 /// Publish the final state of a transfer and stop its ticker.
+#[allow(clippy::too_many_arguments)]
 fn finish(
     app: &AppHandle,
     stop: &Arc<AtomicBool>,
     mut prog: Prog,
     done: &Arc<AtomicU64>,
+    t0: Instant,
     result: Result<(), String>,
+    dest_key: &str,
 ) {
     stop.store(true, Ordering::Relaxed);
     prog.done = done.load(Ordering::Relaxed);
     prog.speed = 0;
+    prog.elapsed_ms = t0.elapsed().as_millis() as u64;
     match result {
         Ok(()) => {
             prog.status = "done".into();
             prog.resumable = false;
+        }
+        Err(ref e) if e == fast::PAUSED => {
+            prog.status = "paused".into();
+            prog.resumable = true;
         }
         Err(e) => {
             prog.status = "error".into();
@@ -281,7 +309,16 @@ fn finish(
         }
     }
     let list = app.state::<Transfers>();
+    list.cancel.lock().unwrap().remove(&prog.id);
     push_prog(app, &list, prog);
+    release_dest(app, dest_key);
+}
+
+/// Register a fresh pause flag for this transfer and hand it to the copy loops.
+fn arm_cancel(app: &AppHandle, id: u32) -> fast::Cancel {
+    let c: fast::Cancel = Arc::new(AtomicBool::new(false));
+    app.state::<Transfers>().cancel.lock().unwrap().insert(id, c.clone());
+    c
 }
 
 /* ---------- fast-path decision ---------- */
@@ -334,11 +371,16 @@ async fn copy_file(
     from: &str,
     to: &str,
     done: &Arc<AtomicU64>,
+    cancel: &fast::Cancel,
 ) -> Result<(), String> {
     let mut rf = src.open(from).await.map_err(es)?;
     let mut wf = dst.create(to).await.map_err(es)?;
     let mut buf = vec![0u8; 512 * 1024];
     loop {
+        if fast::stopped(cancel) {
+            wf.shutdown().await.ok();
+            return Err(fast::PAUSED.into());
+        }
         let n = rf.read(&mut buf).await.map_err(es)?;
         if n == 0 {
             break;
@@ -356,6 +398,7 @@ async fn copy_dir(
     from: String,
     to: String,
     done: &Arc<AtomicU64>,
+    cancel: &fast::Cancel,
 ) -> Result<(), String> {
     dst.create_dir(&to).await.ok();
     let mut stack = vec![(from, to)];
@@ -372,7 +415,7 @@ async fn copy_dir(
                 dst.create_dir(&st).await.ok();
                 stack.push((sf, st));
             } else {
-                copy_file(src, dst, &sf, &st, done).await?;
+                copy_file(src, dst, &sf, &st, done, cancel).await?;
             }
         }
     }
@@ -395,10 +438,10 @@ pub async fn transfer_start(
     fast_enabled: Option<bool>,
     fast_min_mb: Option<u64>,
 ) -> Result<(), String> {
-    let id = transfers.1.fetch_add(1, Ordering::SeqCst) + 1;
+    let id = transfers.seq.fetch_add(1, Ordering::SeqCst) + 1;
     let name = src_path.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
     let dest = format!("{}/{}", dst_dir.trim_end_matches('/'), name);
-    transfers.2.lock().unwrap().insert(
+    transfers.resume.lock().unwrap().insert(
         id,
         Resume::Between {
             src_host_id,
@@ -442,10 +485,16 @@ async fn run_between(
     let src_h = pooled(&pool, src_host_id, crate::build_spec(&app, src_host_id)?).await?;
     let dst_h = pooled(&pool, dst_host_id, crate::build_spec(&app, dst_host_id)?).await?;
 
+    let dest_key = format!("{dst_host_id}:{dest}");
+    if !claim_dest(&app.state::<Transfers>(), &dest_key) {
+        return Err(format!("{dest} is already being written by another transfer"));
+    }
     tauri::async_runtime::spawn(async move {
         let mut prog = new_prog(id, desc);
         prog.done = offset;
         let done = Arc::new(AtomicU64::new(offset));
+        let cancel = arm_cancel(&app, id);
+        let t0 = Instant::now();
         let cache = app.state::<fast::CapsCache>();
 
         let size = if is_dir { 0 } else { fast::remote_size(&src_h, &src_path).await.unwrap_or(0) };
@@ -469,25 +518,25 @@ async fn run_between(
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
         }
-        let stop = start_ticker(&app, id, done.clone());
+        let stop = start_ticker(&app, id, done.clone(), t0);
 
         let mut result = if plan.fast {
-            fast::host_to_host(&src_h, &dst_h, &src_path, &dest, offset, plan.compress, done.clone()).await
+            fast::host_to_host(&src_h, &dst_h, &src_path, &dest, offset, plan.compress, done.clone(), cancel.clone()).await
         } else {
             Err("__sftp__".into())
         };
-        if plan.fast {
+        if plan.fast && !is_paused(&result) {
             result = verify_remote(&dst_h, &dest, size, result).await;
         }
 
         // any fast-path failure falls back to SFTP rather than surfacing an error
-        if plan.fast && result.is_err() {
+        if plan.fast && result.is_err() && !is_paused(&result) {
             fast::disable(&cache, dst_host_id).await;
             done.store(0, Ordering::Relaxed);
             prog.method = "sftp".into();
             result = Err("__sftp__".into());
         }
-        if result.as_ref().err().map(|e| e == "__sftp__").unwrap_or(false) {
+        if is_sftp_retry(&result) {
             let list = app.state::<Transfers>();
             prog.method = "sftp".into();
             push_prog(&app, &list, prog.clone());
@@ -495,16 +544,24 @@ async fn run_between(
                 let src = open_sftp(&src_h).await?;
                 let dst = open_sftp(&dst_h).await?;
                 if is_dir {
-                    copy_dir(&src, &dst, src_path.clone(), dest.clone(), &done).await
+                    copy_dir(&src, &dst, src_path.clone(), dest.clone(), &done, &cancel).await
                 } else {
-                    copy_file(&src, &dst, &src_path, &dest, &done).await
+                    copy_file(&src, &dst, &src_path, &dest, &done, &cancel).await
                 }
             }
             .await;
         }
-        finish(&app, &stop, prog, &done, result);
+        finish(&app, &stop, prog, &done, t0, result, &dest_key);
     });
     Ok(())
+}
+
+fn is_paused(r: &Result<(), String>) -> bool {
+    matches!(r, Err(e) if e == fast::PAUSED)
+}
+
+fn is_sftp_retry(r: &Result<(), String>) -> bool {
+    matches!(r, Err(e) if e == "__sftp__")
 }
 
 /// A streamed transfer has no per-chunk acknowledgement, so confirm the
@@ -528,24 +585,32 @@ async fn verify_remote(
 
 #[tauri::command]
 pub fn transfers_clear(app: AppHandle, transfers: State<'_, Transfers>) {
+    // "clear finished" means exactly that: anything not still running goes,
+    // failed and paused rows included. Keeping them back was just confusing.
     let keep: Vec<u32> = {
-        let mut v = transfers.0.lock().unwrap();
-        v.retain(|t| t.status == "running" || (t.status == "error" && t.resumable));
+        let mut v = transfers.list.lock().unwrap();
+        v.retain(|t| t.status == "running");
         v.iter().map(|t| t.id).collect()
     };
-    transfers.2.lock().unwrap().retain(|k, _| keep.contains(k));
-    let v = transfers.0.lock().unwrap().clone();
+    transfers.resume.lock().unwrap().retain(|k, _| keep.contains(k));
+    let v = transfers.list.lock().unwrap().clone();
     let _ = app.emit("transfers", v);
 }
 
-/// Drop a failed transfer the owner has decided not to resume. Without this,
-/// resumable rows would sit in the strip forever, since `transfers_clear`
-/// deliberately keeps them.
+/// Stop a running transfer but keep it resumable. This is the pause button.
+#[tauri::command]
+pub fn transfer_pause(transfers: State<'_, Transfers>, id: u32) {
+    if let Some(c) = transfers.cancel.lock().unwrap().get(&id) {
+        c.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Drop a single transfer row without disturbing the others.
 #[tauri::command]
 pub fn transfer_forget(app: AppHandle, transfers: State<'_, Transfers>, id: u32) {
-    transfers.0.lock().unwrap().retain(|t| t.id != id);
-    transfers.2.lock().unwrap().remove(&id);
-    let v = transfers.0.lock().unwrap().clone();
+    transfers.list.lock().unwrap().retain(|t| t.id != id);
+    transfers.resume.lock().unwrap().remove(&id);
+    let v = transfers.list.lock().unwrap().clone();
     let _ = app.emit("transfers", v);
 }
 
@@ -561,7 +626,7 @@ pub async fn transfer_resume(
     fast_min_mb: Option<u64>,
 ) -> Result<(), String> {
     let spec = transfers
-        .2
+        .resume
         .lock()
         .unwrap()
         .get(&id)
@@ -604,8 +669,8 @@ pub async fn sftp_download(
     fast_enabled: Option<bool>,
     fast_min_mb: Option<u64>,
 ) -> Result<(), String> {
-    let id = transfers.1.fetch_add(1, Ordering::SeqCst) + 1;
-    transfers.2.lock().unwrap().insert(
+    let id = transfers.seq.fetch_add(1, Ordering::SeqCst) + 1;
+    transfers.resume.lock().unwrap().insert(
         id,
         Resume::Download {
             host_id,
@@ -631,10 +696,16 @@ async fn run_download(
 ) -> Result<(), String> {
     let pool = app.state::<SshPool>();
     let handle = pooled(&pool, host_id, crate::build_spec(&app, host_id)?).await?;
+    let dest_key = format!("local:{local_path}");
+    if !claim_dest(&app.state::<Transfers>(), &dest_key) {
+        return Err(format!("{local_path} is already being written by another transfer"));
+    }
     tauri::async_runtime::spawn(async move {
         let mut prog = new_prog(id, desc);
         prog.done = offset;
         let done = Arc::new(AtomicU64::new(offset));
+        let cancel = arm_cancel(&app, id);
+        let t0 = Instant::now();
         let cache = app.state::<fast::CapsCache>();
 
         let size = fast::remote_size(&handle, &remote_path).await.unwrap_or(0);
@@ -650,20 +721,20 @@ async fn run_download(
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
         }
-        let stop = start_ticker(&app, id, done.clone());
+        let stop = start_ticker(&app, id, done.clone(), t0);
 
         let mut result = if plan.fast {
-            let r = fast::download(&handle, &remote_path, &local_path, offset, plan.compress, done.clone()).await;
-            verify_local(&local_path, size, r).await
+            let r = fast::download(&handle, &remote_path, &local_path, offset, plan.compress, done.clone(), cancel.clone()).await;
+            if is_paused(&r) { r } else { verify_local(&local_path, size, r).await }
         } else {
             Err("__sftp__".into())
         };
-        if plan.fast && result.is_err() {
+        if plan.fast && result.is_err() && !is_paused(&result) {
             fast::disable(&cache, host_id).await;
             done.store(0, Ordering::Relaxed);
             result = Err("__sftp__".into());
         }
-        if result.as_ref().err().map(|e| e == "__sftp__").unwrap_or(false) {
+        if is_sftp_retry(&result) {
             prog.method = "sftp".into();
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
@@ -673,6 +744,9 @@ async fn run_download(
                 let mut wf = tokio::fs::File::create(&local_path).await.map_err(es)?;
                 let mut buf = vec![0u8; 512 * 1024];
                 loop {
+                    if fast::stopped(&cancel) {
+                        return Err(fast::PAUSED.into());
+                    }
                     let n = rf.read(&mut buf).await.map_err(es)?;
                     if n == 0 {
                         break;
@@ -685,7 +759,7 @@ async fn run_download(
             }
             .await;
         }
-        finish(&app, &stop, prog, &done, result);
+        finish(&app, &stop, prog, &done, t0, result, &dest_key);
     });
     Ok(())
 }
@@ -715,13 +789,13 @@ pub async fn sftp_upload(
     fast_enabled: Option<bool>,
     fast_min_mb: Option<u64>,
 ) -> Result<(), String> {
-    let id = transfers.1.fetch_add(1, Ordering::SeqCst) + 1;
+    let id = transfers.seq.fetch_add(1, Ordering::SeqCst) + 1;
     let name = std::path::Path::new(&local_path)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .ok_or("bad local path")?;
     let dest = format!("{}/{}", remote_dir.trim_end_matches('/'), name);
-    transfers.2.lock().unwrap().insert(
+    transfers.resume.lock().unwrap().insert(
         id,
         Resume::Upload {
             host_id,
@@ -755,10 +829,16 @@ async fn run_upload(
 ) -> Result<(), String> {
     let pool = app.state::<SshPool>();
     let handle = pooled(&pool, host_id, crate::build_spec(&app, host_id)?).await?;
+    let dest_key = format!("{host_id}:{dest}");
+    if !claim_dest(&app.state::<Transfers>(), &dest_key) {
+        return Err(format!("{dest} is already being written by another transfer"));
+    }
     tauri::async_runtime::spawn(async move {
         let mut prog = new_prog(id, desc);
         prog.done = offset;
         let done = Arc::new(AtomicU64::new(offset));
+        let cancel = arm_cancel(&app, id);
+        let t0 = Instant::now();
         let cache = app.state::<fast::CapsCache>();
 
         let size = tokio::fs::metadata(&local_path).await.map(|m| m.len()).unwrap_or(0);
@@ -770,20 +850,20 @@ async fn run_upload(
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
         }
-        let stop = start_ticker(&app, id, done.clone());
+        let stop = start_ticker(&app, id, done.clone(), t0);
 
         let mut result = if plan.fast {
-            let r = fast::upload(&handle, &local_path, &dest, offset, plan.compress, done.clone()).await;
-            verify_remote(&handle, &dest, size, r).await
+            let r = fast::upload(&handle, &local_path, &dest, offset, plan.compress, done.clone(), cancel.clone()).await;
+            if is_paused(&r) { r } else { verify_remote(&handle, &dest, size, r).await }
         } else {
             Err("__sftp__".into())
         };
-        if plan.fast && result.is_err() {
+        if plan.fast && result.is_err() && !is_paused(&result) {
             fast::disable(&cache, host_id).await;
             done.store(0, Ordering::Relaxed);
             result = Err("__sftp__".into());
         }
-        if result.as_ref().err().map(|e| e == "__sftp__").unwrap_or(false) {
+        if is_sftp_retry(&result) {
             prog.method = "sftp".into();
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
@@ -793,6 +873,9 @@ async fn run_upload(
                 let mut wf = sftp.create(&dest).await.map_err(es)?;
                 let mut buf = vec![0u8; 512 * 1024];
                 loop {
+                    if fast::stopped(&cancel) {
+                        return Err(fast::PAUSED.into());
+                    }
                     let n = rf.read(&mut buf).await.map_err(es)?;
                     if n == 0 {
                         break;
@@ -806,7 +889,7 @@ async fn run_upload(
             .await;
         }
         let ok = result.is_ok();
-        finish(&app, &stop, prog, &done, result);
+        finish(&app, &stop, prog, &done, t0, result, &dest_key);
         // if this came from an OS drag and drop, drop the temp spool now that
         // the transfer is over — the frontend cannot, this task is detached.
         // On failure the spool is kept so the transfer stays resumable.
