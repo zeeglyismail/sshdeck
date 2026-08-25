@@ -1409,14 +1409,60 @@ function b64(bytes) {
     s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
   return btoa(s);
 }
-async function uploadLocalFiles(P, files, reload) {
+/* Dropping a FOLDER hands us a File entry with size 0 and no contents, which
+   used to upload as an empty file of the same name. The directory tree is only
+   reachable through the entries API, and webkitGetAsEntry() must be called
+   synchronously in the drop handler before any await, or the items are gone. */
+function dropEntries(dt) {
+  return [...(dt.items || [])]
+    .map(i => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null))
+    .filter(Boolean);
+}
+
+function readBatch(reader) {
+  return new Promise((res, rej) => reader.readEntries(res, rej));
+}
+
+async function walkEntry(entry, prefix, out, dirs) {
+  if (entry.isFile) {
+    out.push({ file: await new Promise((res, rej) => entry.file(res, rej)), rel: prefix });
+    return;
+  }
+  if (!entry.isDirectory) return;
+  const dir = prefix ? prefix + "/" + entry.name : entry.name;
+  dirs.push(dir);
+  const reader = entry.createReader();
+  // readEntries hands back at most 100 per call, so keep going until it is dry
+  for (;;) {
+    const batch = await readBatch(reader);
+    if (!batch.length) break;
+    for (const e of batch) await walkEntry(e, dir, out, dirs);
+  }
+}
+
+/// Flatten dropped entries into files tagged with their sub-path, plus the list
+/// of directories to create first (so empty ones survive the trip too).
+async function expandDrop(entries) {
+  const out = [], dirs = [];
+  for (const e of entries) await walkEntry(e, "", out, dirs);
+  return { items: out, dirs };
+}
+
+async function uploadLocalFiles(P, files, reload, dirs) {
   const host = hostById(P.hostId);
   const box = $("#transfers"), list = $("#tr-list");
   box.classList.remove("hidden");
-  for (const file of files) {
+  // shallowest first, so parents exist before their children
+  for (const d of (dirs || []).slice().sort((a, b) => a.split("/").length - b.split("/").length)) {
+    await invoke("sftp_mkdir", { hostId: P.hostId, path: joinPath(P.path, d) }).catch(() => {});
+  }
+  for (const entry of files) {
+    const file = entry.file || entry;
+    const rel = entry.rel || "";
+    const destDir = rel ? joinPath(P.path, rel) : P.path;
     const row = document.createElement("div");
     row.className = "tr-item running";
-    row.innerHTML = `<span class="desc">${esc(file.name)} → ${esc(host.label)}:${esc(P.path)}</span>` +
+    row.innerHTML = `<span class="desc">${esc(rel ? rel + "/" + file.name : file.name)} → ${esc(host.label)}:${esc(destDir)}</span>` +
       `<span class="meter"><i style="width:0%"></i></span><span class="status">reading…</span>`;
     list.appendChild(row);
     const bar = row.querySelector("i"), st = row.querySelector(".status");
@@ -1433,7 +1479,7 @@ async function uploadLocalFiles(P, files, reload) {
       st.textContent = "uploading…";
       await invoke("sftp_upload", {
         ...fastOpts(),
-        hostId: P.hostId, localPath: path, remoteDir: P.path, hostLabel: host.label,
+        hostId: P.hostId, localPath: path, remoteDir: destDir, hostLabel: host.label,
       });
       row.remove();               // the transfers event takes over from here
     } catch (e) {
@@ -1730,9 +1776,16 @@ function buildPane(paneEl, i) {
     if (!P.hostId) return;
     const raw = ev.dataTransfer.getData("application/x-deck");
     if (!raw) {
-      // files dropped from Explorer/desktop → spool their bytes, then upload
-      const files = [...(ev.dataTransfer.files || [])];
-      if (files.length) await uploadLocalFiles(P, files, load);
+      // files or folders dropped from Explorer → spool their bytes, then upload.
+      // Grab the entries synchronously; awaiting first would empty the list.
+      const entries = dropEntries(ev.dataTransfer);
+      const plain = [...(ev.dataTransfer.files || [])];
+      if (entries.length) {
+        const { items, dirs } = await expandDrop(entries);
+        if (items.length || dirs.length) await uploadLocalFiles(P, items, load, dirs);
+      } else if (plain.length) {
+        await uploadLocalFiles(P, plain, load);
+      }
       return;
     }
     const d = JSON.parse(raw);
@@ -1787,6 +1840,8 @@ listen("transfers", ev => {
         + (eta ? " \u00b7 " + eta + " left" : "");
     } else if (t.status === "error") {
       status = "\u2717 " + esc(t.error || "failed");
+    } else if (t.status === "canceled") {
+      status = "\u2715 canceled at " + fmtBytes(t.done);
     } else if (t.status === "paused") {
       status = "\u23f8 paused at " + fmtBytes(t.done) + (t.total ? " / " + fmtBytes(t.total) : "");
     } else {
@@ -1799,6 +1854,8 @@ listen("transfers", ev => {
     if (t.status === "running") {
       item.appendChild(trButton("tr-act", "\u23f8 Pause", "Stop now and keep what has transferred, so Resume can finish it later",
         b => { b.disabled = true; invoke("transfer_pause", { id: t.id }); }));
+      item.appendChild(trButton("tr-act tr-x", "\u2715", "Cancel this transfer and delete the partial file",
+        b => { b.disabled = true; invoke("transfer_cancel", { id: t.id }); }));
     }
     if (t.resumable) {
       item.appendChild(trButton("tr-act", "\u25b6 Resume", "Pick up from " + fmtBytes(t.done) + " instead of starting over",

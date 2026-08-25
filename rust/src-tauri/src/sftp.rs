@@ -246,13 +246,24 @@ fn release_dest(app: &AppHandle, key: &str) {
 
 const TICK_MS: u64 = 400;
 
-fn start_ticker(app: &AppHandle, id: u32, done: Arc<AtomicU64>, t0: Instant) -> Arc<AtomicBool> {
+/// No bytes at all for this long means the transfer is wedged, not slow.
+/// Without this a stalled stream sits at 99% forever with a live-looking row.
+const STALL_TICKS: u32 = (90_000 / TICK_MS) as u32;
+
+fn start_ticker(
+    app: &AppHandle,
+    id: u32,
+    done: Arc<AtomicU64>,
+    t0: Instant,
+    cancel: fast::Cancel,
+) -> Arc<AtomicBool> {
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut last = done.load(Ordering::Relaxed);
         let mut ema = 0f64;
+        let mut idle = 0u32;
         while !flag.load(Ordering::Relaxed) {
             tokio::time::sleep(std::time::Duration::from_millis(TICK_MS)).await;
             if flag.load(Ordering::Relaxed) {
@@ -260,6 +271,14 @@ fn start_ticker(app: &AppHandle, id: u32, done: Arc<AtomicU64>, t0: Instant) -> 
             }
             let cur = done.load(Ordering::Relaxed);
             let inst = (cur.saturating_sub(last)) as f64 * 1000.0 / TICK_MS as f64;
+            if cur == last {
+                idle += 1;
+                if idle == STALL_TICKS && cancel.load(Ordering::Relaxed) == fast::RUN {
+                    cancel.store(fast::STALL, Ordering::Relaxed);
+                }
+            } else {
+                idle = 0;
+            }
             last = cur;
             // smoothed, so a tick that lands during a stall does not blank the
             // rate and ETA out of the row
@@ -287,6 +306,7 @@ fn finish(
     t0: Instant,
     result: Result<(), String>,
     dest_key: &str,
+    reason: u8,
 ) {
     stop.store(true, Ordering::Relaxed);
     prog.done = done.load(Ordering::Relaxed);
@@ -297,10 +317,21 @@ fn finish(
             prog.status = "done".into();
             prog.resumable = false;
         }
-        Err(ref e) if e == fast::PAUSED => {
-            prog.status = "paused".into();
-            prog.resumable = true;
-        }
+        Err(ref e) if e == fast::PAUSED => match reason {
+            fast::CANCEL => {
+                prog.status = "canceled".into();
+                prog.resumable = false;
+            }
+            fast::STALL => {
+                prog.status = "error".into();
+                prog.error = Some("stalled — no data for 90s".into());
+                prog.resumable = prog.done > 0;
+            }
+            _ => {
+                prog.status = "paused".into();
+                prog.resumable = true;
+            }
+        },
         Err(e) => {
             prog.status = "error".into();
             // only worth offering a resume if we actually moved something
@@ -316,7 +347,7 @@ fn finish(
 
 /// Register a fresh pause flag for this transfer and hand it to the copy loops.
 fn arm_cancel(app: &AppHandle, id: u32) -> fast::Cancel {
-    let c: fast::Cancel = Arc::new(AtomicBool::new(false));
+    let c: fast::Cancel = Arc::new(std::sync::atomic::AtomicU8::new(fast::RUN));
     app.state::<Transfers>().cancel.lock().unwrap().insert(id, c.clone());
     c
 }
@@ -481,9 +512,8 @@ async fn run_between(
     offset: u64,
     (fast_on, min_bytes): (bool, u64),
 ) -> Result<(), String> {
-    let pool = app.state::<SshPool>();
-    let src_h = pooled(&pool, src_host_id, crate::build_spec(&app, src_host_id)?).await?;
-    let dst_h = pooled(&pool, dst_host_id, crate::build_spec(&app, dst_host_id)?).await?;
+    let src_h = crate::ssh::dedicated(&crate::build_spec(&app, src_host_id)?).await?;
+    let dst_h = crate::ssh::dedicated(&crate::build_spec(&app, dst_host_id)?).await?;
 
     let dest_key = format!("{dst_host_id}:{dest}");
     if !claim_dest(&app.state::<Transfers>(), &dest_key) {
@@ -518,7 +548,7 @@ async fn run_between(
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
         }
-        let stop = start_ticker(&app, id, done.clone(), t0);
+        let stop = start_ticker(&app, id, done.clone(), t0, cancel.clone());
 
         let mut result = if plan.fast {
             fast::host_to_host(&src_h, &dst_h, &src_path, &dest, offset, plan.compress, done.clone(), cancel.clone()).await
@@ -551,9 +581,20 @@ async fn run_between(
             }
             .await;
         }
-        finish(&app, &stop, prog, &done, t0, result, &dest_key);
+        let reason = cancel.load(Ordering::Relaxed);
+        discard_partial_remote(&dst_h, &dest, reason, offset).await;
+        finish(&app, &stop, prog, &done, t0, result, &dest_key, reason);
     });
     Ok(())
+}
+
+/// A canceled transfer that created the destination from scratch leaves a
+/// truncated file that looks real. Remove it — but only when we started at zero,
+/// since a canceled *resume* must not destroy what was already there.
+async fn discard_partial_remote(h: &Handle<Client>, path: &str, reason: u8, offset: u64) {
+    if reason == fast::CANCEL && offset == 0 {
+        let _ = fast::run_rm(h, path).await;
+    }
 }
 
 fn is_paused(r: &Result<(), String>) -> bool {
@@ -600,8 +641,20 @@ pub fn transfers_clear(app: AppHandle, transfers: State<'_, Transfers>) {
 /// Stop a running transfer but keep it resumable. This is the pause button.
 #[tauri::command]
 pub fn transfer_pause(transfers: State<'_, Transfers>, id: u32) {
+    stop_with(&transfers, id, fast::PAUSE);
+}
+
+/// Abandon a transfer outright. Unlike pause this is not resumable, and a
+/// partial file that this transfer created is cleaned up rather than left
+/// behind looking like a real one.
+#[tauri::command]
+pub fn transfer_cancel(transfers: State<'_, Transfers>, id: u32) {
+    stop_with(&transfers, id, fast::CANCEL);
+}
+
+fn stop_with(transfers: &Transfers, id: u32, reason: u8) {
     if let Some(c) = transfers.cancel.lock().unwrap().get(&id) {
-        c.store(true, Ordering::Relaxed);
+        c.store(reason, Ordering::Relaxed);
     }
 }
 
@@ -721,7 +774,7 @@ async fn run_download(
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
         }
-        let stop = start_ticker(&app, id, done.clone(), t0);
+        let stop = start_ticker(&app, id, done.clone(), t0, cancel.clone());
 
         let mut result = if plan.fast {
             let r = fast::download(&handle, &remote_path, &local_path, offset, plan.compress, done.clone(), cancel.clone()).await;
@@ -759,7 +812,11 @@ async fn run_download(
             }
             .await;
         }
-        finish(&app, &stop, prog, &done, t0, result, &dest_key);
+        let reason = cancel.load(Ordering::Relaxed);
+        if reason == fast::CANCEL && offset == 0 {
+            let _ = tokio::fs::remove_file(&local_path).await;
+        }
+        finish(&app, &stop, prog, &done, t0, result, &dest_key, reason);
     });
     Ok(())
 }
@@ -850,7 +907,7 @@ async fn run_upload(
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
         }
-        let stop = start_ticker(&app, id, done.clone(), t0);
+        let stop = start_ticker(&app, id, done.clone(), t0, cancel.clone());
 
         let mut result = if plan.fast {
             let r = fast::upload(&handle, &local_path, &dest, offset, plan.compress, done.clone(), cancel.clone()).await;
@@ -889,7 +946,9 @@ async fn run_upload(
             .await;
         }
         let ok = result.is_ok();
-        finish(&app, &stop, prog, &done, t0, result, &dest_key);
+        let reason = cancel.load(Ordering::Relaxed);
+        discard_partial_remote(&handle, &dest, reason, offset).await;
+        finish(&app, &stop, prog, &done, t0, result, &dest_key, reason);
         // if this came from an OS drag and drop, drop the temp spool now that
         // the transfer is over — the frontend cannot, this task is detached.
         // On failure the spool is kept so the transfer stays resumable.

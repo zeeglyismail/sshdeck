@@ -93,6 +93,19 @@ async fn connect(spec: &ConnectSpec) -> Result<Handle<Client>, String> {
     connect_with(spec, Client::default()).await
 }
 
+/// A connection that belongs to one caller only.
+///
+/// Bulk transfers must NOT ride the pooled connection. A multi-hundred-MB
+/// stream and the SFTP browsing/stat channels share the session window, and one
+/// channel that stops draining wedges the whole session: the other transfer
+/// freezes a hair short of done and the next `channel_open_session` comes back
+/// as "Channel send error". One connection per transfer keeps that blast radius
+/// to the transfer that caused it. The handshake costs a few hundred ms, which
+/// is noise next to the 64 MB floor for taking this path at all.
+pub async fn dedicated(spec: &ConnectSpec) -> Result<Handle<Client>, String> {
+    connect(spec).await
+}
+
 /// Connect + authenticate with a caller-supplied handler (used by remote tunnels
 /// that need the forwarded-channel callback).
 pub async fn connect_with(spec: &ConnectSpec, handler: Client) -> Result<Handle<Client>, String> {

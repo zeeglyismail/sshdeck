@@ -108,7 +108,10 @@ a plain exec channel instead: `tail -c +N | zstd -1 -c` for reads,
 - **Compression is sampled, never guessed**: 4 MB from ~10% into the file, compress
   it, use zstd only if it shrinks below 85%. A `.vhdx` may be zero runs or packed
   solid and only the bytes know which.
-- **Pause** (`transfer_pause`) sets an `AtomicBool` the copy loops watch; it is not
+- **Pause / cancel / stall** share one `AtomicU8` (`RUN/PAUSE/CANCEL/STALL`) that the
+  copy loops watch. Cancel is not resumable and removes the partial file it created
+  (only when it started at offset 0 — a canceled *resume* must not destroy what was
+  already there). `transfer_pause` sets the flag the copy loops watch; it is not
   an error, it lands the row as `paused` + resumable. On the compressed upload path
   the encoder still calls `finish()` so the remote decoder gets a complete frame and
   writes out everything sent — resuming from a torn frame would leave a gap.
@@ -130,6 +133,19 @@ a plain exec channel instead: `tail -c +N | zstd -1 -c` for reads,
   window is spent and nothing refills it — uploads froze at ~15 MB. Always
   `tokio::io::split` and drain the read half concurrently (`fast::split_drain`).
   The drain completing is also the signal that the remote command exited.
+- **Bulk transfers get a DEDICATED connection (`ssh::dedicated`), never the pool.**
+  A big stream and the SFTP browse/stat channels share the session window; one
+  channel that stops draining wedges the whole session, so a second transfer froze
+  a hair short of done and the next `channel_open_session` returned "Channel send
+  error". One connection per transfer bounds the damage. Verified: 4 concurrent
+  200 MB uploads all land sha256-identical while stat calls keep answering.
+- **A stalled stream must not look alive.** `start_ticker` watches for 90 s with no
+  bytes and trips the cancel flag with `STALL`, so the row errors (and stays
+  resumable) instead of sitting at 99% forever.
+- **Dropped FOLDERS arrive as a 0-byte File.** The tree is only reachable via
+  `webkitGetAsEntry()`, and it MUST be called synchronously in the drop handler —
+  awaiting first empties `dataTransfer.items`. `readEntries` also returns at most
+  100 per call, so loop until it is dry or you silently lose files.
 - **Two transfers must never share a destination.** Dropping the same file twice
   gave both `dd` writes one path; the second `: > file` truncated under the first
   and the channel died with "Channel send error". `claim_dest` refuses the second.

@@ -26,17 +26,25 @@ fn es<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
-/// Flag a transfer watches so it can be paused. Pausing is not an error: the
+/// Why a transfer stopped early. The copy loops only care whether it is
+/// non-zero; the caller decides what the row should say.
+pub const RUN: u8 = 0;
+pub const PAUSE: u8 = 1;
+pub const CANCEL: u8 = 2;
+/// set by the watchdog when no bytes have moved for a long time
+pub const STALL: u8 = 3;
+
+/// Flag a transfer watches so it can be stopped. Stopping is not an error: the
 /// bytes already written stay put and `transfer_resume` picks up from the
 /// destination size, which is what makes it safe on a 300 GB image.
-pub type Cancel = Arc<std::sync::atomic::AtomicBool>;
+pub type Cancel = Arc<std::sync::atomic::AtomicU8>;
 
-/// Sentinel error meaning "stopped on purpose" — callers must not treat this
-/// as a fast-path failure or they would fall back to SFTP and start over.
+/// Sentinel error meaning "stopped on purpose" — callers must not treat this as
+/// a fast-path failure or they would fall back to SFTP and start over.
 pub const PAUSED: &str = "__paused__";
 
 pub fn stopped(c: &Cancel) -> bool {
-    c.load(Ordering::Relaxed)
+    c.load(Ordering::Relaxed) != RUN
 }
 
 /// Single-quote a path for `sh -c`.
@@ -265,6 +273,11 @@ fn split_drain(stream: Stream) -> (tokio::io::WriteHalf<Stream>, tokio::task::Jo
         }
     });
     (wr, drain)
+}
+
+/// Delete a remote file. Used to clear the stub a canceled transfer leaves.
+pub async fn run_rm(h: &Handle<Client>, path: &str) -> Option<String> {
+    run_command(h, &format!("rm -f -- {}", shq(path))).await
 }
 
 /// Size of a remote file, or None if it is missing or unreadable.
