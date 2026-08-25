@@ -614,6 +614,8 @@ async function connectInst(inst) {
     inst.stats = s;
     inst.cpuHist.push(s.cpu); if (inst.cpuHist.length > 60) inst.cpuHist.shift();
     inst.netHist.push({ rx: s.rx_rate, tx: s.tx_rate }); if (inst.netHist.length > 60) inst.netHist.shift();
+    inst.diskHist.push({ rd: s.disk_rd || 0, wr: s.disk_wr || 0 });
+    if (inst.diskHist.length > 60) inst.diskHist.shift();
     if (isFocused(inst)) { renderStats(inst); updateConn(inst); }
   }));
   try {
