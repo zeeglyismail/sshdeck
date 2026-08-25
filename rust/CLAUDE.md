@@ -139,6 +139,17 @@ a plain exec channel instead: `tail -c +N | zstd -1 -c` for reads,
   a hair short of done and the next `channel_open_session` returned "Channel send
   error". One connection per transfer bounds the damage. Verified: 4 concurrent
   200 MB uploads all land sha256-identical while stat calls keep answering.
+- **A blocked socket write cannot see a flag.** Pause/cancel/stall set an
+  `AtomicU8`, but the loops only tested it *between* writes — and a write against
+  a peer that stopped reading never returns, so the flag was unreachable and the
+  buttons did nothing. Every socket read/write now races `until_stopped` via
+  `tokio::select!` (`read_or_stop` / `write_or_stop`). Dropping the mpsc receiver
+  is what frees the blocking reader thread, which can be parked in
+  `blocking_send` where it also cannot see the flag.
+- **Transfers to one host are serialized** (`gate_for`, a per-host `Semaphore(1)`).
+  Several big streams at one spinning disk seek against each other until
+  throughput collapses — that is how two uploads wedged at half done. Queueing
+  also matches MobaXterm, and queued rows show as `queued` and stay cancellable.
 - **A stalled stream must not look alive.** `start_ticker` watches for 90 s with no
   bytes and trips the cancel flag with `STALL`, so the row errors (and stays
   resumable) instead of sitting at 99% forever.
@@ -155,6 +166,11 @@ a plain exec channel instead: `tail -c +N | zstd -1 -c` for reads,
   `renderTransfers()` is the fix; `clear finished` only ever drops finished
   server rows, and a prep row retires when a server row with the same `desc`
   appears (so the JS desc must match `format!("{name} → {label}:{dir}")` exactly).
+- **Build every prep row before spooling any of them.** Creating rows inside the
+  loop meant a multi-file drop showed one row until that file finished, which
+  read as "only one file was accepted". Likewise `expandDrop` must start all
+  entries with `Promise.all`: resolving them one at a time let the drag data
+  store go stale and only the first file survived.
 - **Spooling must be cancellable.** It is the longest phase for a big local file
   (base64 chunks over IPC) and there was no way to stop it.
 - **Write commands run as `{ …; } 2>&1`** so the drain captures the remote's own

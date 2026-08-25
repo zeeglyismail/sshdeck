@@ -1444,7 +1444,9 @@ async function walkEntry(entry, prefix, out, dirs) {
 /// of directories to create first (so empty ones survive the trip too).
 async function expandDrop(entries) {
   const out = [], dirs = [];
-  for (const e of entries) await walkEntry(e, "", out, dirs);
+  // start every entry together: resolving them one after another let the drag
+  // data store go stale, so only the first dropped file ever came through
+  await Promise.all(entries.map(e => walkEntry(e, "", out, dirs)));
   return { items: out, dirs };
 }
 
@@ -1455,7 +1457,10 @@ async function uploadLocalFiles(P, files, reload, dirs) {
   for (const d of (dirs || []).slice().sort((a, b) => a.split("/").length - b.split("/").length)) {
     await invoke("sftp_mkdir", { hostId: P.hostId, path: joinPath(P.path, d) }).catch(() => {});
   }
-  for (const entry of files) {
+  // Build every row before doing any work. Creating them one at a time meant a
+  // multi-file drop showed a single row until that file had finished, which
+  // looked like only one file had been accepted.
+  const queue = files.map(entry => {
     const file = entry.file || entry;
     const rel = entry.rel || "";
     const destDir = rel ? joinPath(P.path, rel) : P.path;
@@ -1464,11 +1469,18 @@ async function uploadLocalFiles(P, files, reload, dirs) {
     // the moment the real transfer takes over
     const row = {
       id: key, desc: `${file.name} → ${host.label}:${destDir}`,
-      done: 0, total: file.size, status: "preparing", error: null,
+      done: 0, total: file.size, status: "queued", error: null,
       speed: 0, method: "", resumable: false, elapsed_ms: 0,
       cancel: false, handedOff: false,
     };
     PREP.set(key, row);
+    return { file, destDir, key, row };
+  });
+  renderTransfers();
+
+  for (const { file, destDir, key, row } of queue) {
+    if (row.cancel) { PREP.delete(key); renderTransfers(); continue; }
+    row.status = "preparing";
     renderTransfers();
     let path, painted = 0;
     try {
@@ -1863,7 +1875,9 @@ function renderTransfers() {
       ? `<span class="tr-badge ${t.method === "fast+zstd" ? "zstd" : ""}">${esc(t.method)}</span>` : "";
     const avg = t.elapsed_ms > 500 ? t.done / (t.elapsed_ms / 1000) : 0;
     let status;
-    if (t.status === "preparing") {
+    if (t.status === "queued") {
+      status = "waiting \u00b7 " + fmtBytes(t.total);
+    } else if (t.status === "preparing") {
       status = "reading " + fmtBytes(t.done) + " / " + fmtBytes(t.total);
     } else if (t.status === "running") {
       const eta = t.speed && t.total ? fmtEta((t.total - t.done) / t.speed) : "";
@@ -1884,10 +1898,14 @@ function renderTransfers() {
       <span class="meter"><i style="width:${pct ?? (t.status === "done" ? 100 : 30)}%"></i></span>
       <span class="status">${status}</span>`;
 
-    if (t.status === "preparing") {
-      // cancellable from the first byte read, not only once the transfer starts
-      item.appendChild(trButton("tr-act tr-x", "\u2715", "Cancel — stop reading this file",
-        b => { b.disabled = true; t.cancel = true; }));
+    if (t.status === "queued" || t.status === "preparing") {
+      // cancellable from the moment it joins the queue, not only once it starts
+      item.appendChild(trButton("tr-act tr-x", "\u2715", "Cancel — drop this file from the queue",
+        b => {
+          b.disabled = true;
+          t.cancel = true;
+          if (typeof t.id === "number") invoke("transfer_cancel", { id: t.id });
+        }));
     } else if (t.status === "running") {
       item.appendChild(trButton("tr-act", "\u23f8 Pause", "Stop now and keep what has transferred, so Resume can finish it later",
         b => { b.disabled = true; invoke("transfer_pause", { id: t.id }); }));

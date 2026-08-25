@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -198,6 +199,23 @@ pub struct Transfers {
     /// destinations currently being written, so two transfers cannot fight
     /// over the same path
     pub dests: Mutex<HashSet<String>>,
+    /// one transfer at a time per host
+    pub gates: Mutex<HashMap<i64, Arc<Semaphore>>>,
+}
+
+/// Transfers to a given host run one at a time.
+///
+/// Several multi-hundred-MB streams pointed at the same spinning disk do not go
+/// faster than one — they seek against each other until throughput collapses,
+/// which is how two uploads ended up wedged at half done. Queueing also matches
+/// what MobaXterm does, so the rest of the queue is visible and waiting rather
+/// than all crawling at once.
+fn gate_for(app: &AppHandle, host_id: i64) -> Arc<Semaphore> {
+    let t = app.state::<Transfers>();
+    let mut g = t.gates.lock().unwrap();
+    g.entry(host_id)
+        .or_insert_with(|| Arc::new(Semaphore::new(1)))
+        .clone()
 }
 
 fn push_prog(app: &AppHandle, list: &Transfers, p: Prog) {
@@ -343,6 +361,30 @@ fn finish(
     list.cancel.lock().unwrap().remove(&prog.id);
     push_prog(app, &list, prog);
     release_dest(app, dest_key);
+}
+
+/// Take our turn in the host queue. Returns None if the transfer was canceled
+/// while still waiting, so a queued row can be dropped without ever connecting.
+async fn take_turn(
+    app: &AppHandle,
+    host_id: i64,
+    prog: &mut Prog,
+    cancel: &fast::Cancel,
+) -> Option<OwnedSemaphorePermit> {
+    let gate = gate_for(app, host_id);
+    if gate.available_permits() == 0 {
+        prog.status = "queued".into();
+        let list = app.state::<Transfers>();
+        push_prog(app, &list, prog.clone());
+    }
+    let permit = tokio::select! {
+        p = gate.acquire_owned() => p.ok()?,
+        _ = async { while !fast::stopped(cancel) {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            } } => return None,
+    };
+    prog.status = "running".into();
+    Some(permit)
 }
 
 /// Register a fresh pause flag for this transfer and hand it to the copy loops.
@@ -526,6 +568,14 @@ async fn run_between(
         let cancel = arm_cancel(&app, id);
         let t0 = Instant::now();
         let cache = app.state::<fast::CapsCache>();
+        let Some(_turn) = take_turn(&app, dst_host_id, &mut prog, &cancel).await else {
+            let list = app.state::<Transfers>();
+            list.cancel.lock().unwrap().remove(&id);
+            prog.status = "canceled".into();
+            push_prog(&app, &list, prog);
+            release_dest(&app, &dest_key);
+            return;
+        };
 
         let size = if is_dir { 0 } else { fast::remote_size(&src_h, &src_path).await.unwrap_or(0) };
         let plan = if is_dir {
@@ -760,6 +810,14 @@ async fn run_download(
         let cancel = arm_cancel(&app, id);
         let t0 = Instant::now();
         let cache = app.state::<fast::CapsCache>();
+        let Some(_turn) = take_turn(&app, host_id, &mut prog, &cancel).await else {
+            let list = app.state::<Transfers>();
+            list.cancel.lock().unwrap().remove(&id);
+            prog.status = "canceled".into();
+            push_prog(&app, &list, prog);
+            release_dest(&app, &dest_key);
+            return;
+        };
 
         let size = fast::remote_size(&handle, &remote_path).await.unwrap_or(0);
         let caps = fast::caps(&cache, host_id, &handle).await;
@@ -897,6 +955,15 @@ async fn run_upload(
         let cancel = arm_cancel(&app, id);
         let t0 = Instant::now();
         let cache = app.state::<fast::CapsCache>();
+        let Some(_turn) = take_turn(&app, host_id, &mut prog, &cancel).await else {
+            let list = app.state::<Transfers>();
+            list.cancel.lock().unwrap().remove(&id);
+            prog.status = "canceled".into();
+            push_prog(&app, &list, prog);
+            release_dest(&app, &dest_key);
+            crate::stash::cleanup_if_spool(&local_path);
+            return;
+        };
 
         let size = tokio::fs::metadata(&local_path).await.map(|m| m.len()).unwrap_or(0);
         let caps = fast::caps(&cache, host_id, &handle).await;

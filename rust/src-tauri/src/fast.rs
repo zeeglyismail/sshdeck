@@ -47,6 +47,48 @@ pub fn stopped(c: &Cancel) -> bool {
     c.load(Ordering::Relaxed) != RUN
 }
 
+/// Resolves once someone asks the transfer to stop.
+///
+/// The flag alone is not enough: a socket write against a peer that has stopped
+/// reading blocks forever, and a loop that only tests the flag between writes
+/// never gets to test it again. Pause, cancel and the stall watchdog were all
+/// setting a flag nobody could reach. Racing this against the IO is what makes
+/// them actually take effect.
+async fn until_stopped(cancel: &Cancel) {
+    while !stopped(cancel) {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
+}
+
+/// Write, or give up if the transfer is stopped. `false` means stopped.
+async fn write_or_stop<W: tokio::io::AsyncWrite + Unpin>(
+    w: &mut W,
+    buf: &[u8],
+    cancel: &Cancel,
+) -> Result<bool, String> {
+    tokio::select! {
+        r = w.write_all(buf) => { r.map_err(es)?; Ok(true) }
+        _ = until_stopped(cancel) => Ok(false),
+    }
+}
+
+/// Read, or give up if the transfer is stopped. `None` means stopped.
+async fn read_or_stop<R: tokio::io::AsyncRead + Unpin>(
+    r: &mut R,
+    buf: &mut [u8],
+    cancel: &Cancel,
+) -> Result<Option<usize>, String> {
+    tokio::select! {
+        n = r.read(buf) => Ok(Some(n.map_err(es)?)),
+        _ = until_stopped(cancel) => Ok(None),
+    }
+}
+
+/// Never block shutdown on a peer that has stopped talking to us.
+async fn settle(drain: tokio::task::JoinHandle<()>) {
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), drain).await;
+}
+
 /// Single-quote a path for `sh -c`.
 fn shq(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
@@ -358,11 +400,10 @@ pub async fn download(
     let mut buf = vec![0u8; READ_BUF];
     let mut paused = false;
     loop {
-        if stopped(&cancel) {
+        let Some(n) = read_or_stop(&mut stream, &mut buf, &cancel).await? else {
             paused = true;
             break;
-        }
-        let n = stream.read(&mut buf).await.map_err(es)?;
+        };
         if n == 0 {
             break;
         }
@@ -437,18 +478,27 @@ pub async fn upload(
 
     let mut sent: Result<(), String> = Ok(());
     while let Some(chunk) = rx.recv().await {
-        if let Err(e) = stream.write_all(&chunk).await {
-            sent = Err(es(e));
-            break;
+        match write_or_stop(&mut stream, &chunk, &cancel).await {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(e) => {
+                sent = Err(e);
+                break;
+            }
         }
     }
-    // let the reader finish either way, so the blocking thread is never orphaned
+    // Dropping the receiver is what frees the reader thread: it may be parked in
+    // blocking_send on a full channel, where it cannot see the stop flag either.
+    drop(rx);
     let read_res = reader.await.map_err(es)?;
     stream.flush().await.ok();
     // EOF tells the remote `dd` the file is complete
     let closed = stream.shutdown().await.map_err(es);
     // wait for the remote command to exit before we trust the result
-    let _ = drain.await;
+    settle(drain).await;
+    if stopped(&cancel) {
+        return Err(PAUSED.into());
+    }
     // the remote message is worth more than our transport error, so surface it
     sent.map_err(|e| explain(e, &said))?;
     read_res.map_err(|e| explain(e, &said))?;
@@ -488,20 +538,26 @@ pub async fn host_to_host(
     let mut buf = vec![0u8; READ_BUF];
     let mut paused = false;
     loop {
-        if stopped(&cancel) {
+        let Some(n) = read_or_stop(&mut rs, &mut buf, &cancel).await? else {
             paused = true;
             break;
-        }
-        let n = rs.read(&mut buf).await.map_err(es)?;
+        };
         if n == 0 {
             break;
         }
-        ws.write_all(&buf[..n]).await.map_err(|e| explain(es(e), &said))?;
+        match write_or_stop(&mut ws, &buf[..n], &cancel).await {
+            Ok(true) => {}
+            Ok(false) => {
+                paused = true;
+                break;
+            }
+            Err(e) => return Err(explain(e, &said)),
+        }
         done.fetch_add(n as u64, Ordering::Relaxed);
     }
     ws.flush().await.ok();
     ws.shutdown().await.map_err(|e| explain(es(e), &said))?;
-    let _ = drain.await;
+    settle(drain).await;
     if paused {
         return Err(PAUSED.into());
     }
