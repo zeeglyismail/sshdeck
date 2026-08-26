@@ -655,7 +655,6 @@ async fn run_between(
                     prog.desc
                 ),
             );
-            fast::disable(&cache, dst_host_id).await;
             done.store(0, Ordering::Relaxed);
             prog.method = "sftp".into();
             result = Err("__sftp__".into());
@@ -699,24 +698,35 @@ fn is_sftp_retry(r: &Result<(), String>) -> bool {
     matches!(r, Err(e) if e == "__sftp__")
 }
 
-/// A streamed transfer has no per-chunk acknowledgement, so confirm the
-/// destination really ended up the size we expected before calling it done.
+/// Decide whether a streamed transfer actually worked.
+///
+/// The destination is the authority, not the transport. A channel that closes
+/// as the last bytes land still leaves a complete file, and reporting that as a
+/// failure was wrong: the transfer had in fact moved everything. So check the
+/// size FIRST and only fall back to the transport error when the file really is
+/// short. The transport error is kept for that case because "Channel send
+/// error" explains more than "size mismatch" does.
 async fn verify_remote(
     h: &Handle<Client>,
     path: &str,
     expect: u64,
     result: Result<(), String>,
 ) -> Result<(), String> {
-    result?;
     if expect == 0 {
-        return Ok(());
+        return result;
     }
     match fast::remote_size(h, path).await {
         Some(n) if n == expect => Ok(()),
-        Some(n) => Err(format!("size mismatch: got {n} of {expect} bytes")),
+        Some(n) => match result {
+            Err(e) => Err(e),
+            Ok(()) => Err(format!("size mismatch: got {n} of {expect} bytes")),
+        },
         // no answer is not the same as no file: the host may simply have stopped
         // responding, and the transfer stays resumable either way
-        None => Err("could not confirm the destination size — host did not answer".into()),
+        None => match result {
+            Err(e) => Err(e),
+            Ok(()) => Err("could not confirm the destination size — host did not answer".into()),
+        },
     }
 }
 
@@ -901,7 +911,6 @@ async fn run_download(
                     prog.desc
                 ),
             );
-            fast::disable(&cache, host_id).await;
             done.store(0, Ordering::Relaxed);
             result = Err("__sftp__".into());
         }
@@ -939,15 +948,21 @@ async fn run_download(
     Ok(())
 }
 
+/// Same rule for a download: the file on disk decides, not the socket.
 async fn verify_local(path: &str, expect: u64, result: Result<(), String>) -> Result<(), String> {
-    result?;
     if expect == 0 {
-        return Ok(());
+        return result;
     }
     match tokio::fs::metadata(path).await {
         Ok(m) if m.len() == expect => Ok(()),
-        Ok(m) => Err(format!("size mismatch: got {} of {} bytes", m.len(), expect)),
-        Err(e) => Err(es(e)),
+        Ok(m) => match result {
+            Err(e) => Err(e),
+            Ok(()) => Err(format!("size mismatch: got {} of {} bytes", m.len(), expect)),
+        },
+        Err(e) => match result {
+            Err(orig) => Err(orig),
+            Ok(()) => Err(es(e)),
+        },
     }
 }
 
@@ -1057,7 +1072,6 @@ async fn run_upload(
                     prog.desc
                 ),
             );
-            fast::disable(&cache, host_id).await;
             done.store(0, Ordering::Relaxed);
             result = Err("__sftp__".into());
         }

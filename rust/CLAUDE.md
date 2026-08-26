@@ -157,6 +157,22 @@ dialog as the backup export.
 
 ## Gotchas learned the hard way
 
+- **The destination outranks the transport error.** A channel that closes as the
+  last bytes land still leaves a complete file; reporting that as a failure was
+  simply wrong. `verify_remote`/`verify_local` now check the size FIRST and only
+  surface the transport error when the file really is short (keeping it, because
+  "Channel send error" explains more than "size mismatch"). This does NOT explain
+  why the channel closes at the tail — it makes the reported outcome match
+  reality. The owner had already observed "it genuinely moved but still said
+  channel error".
+- **A transient failure must not condemn a host.** `fast::disable` used to poison
+  the caps cache on ANY failure, so one bad transfer forced every later transfer
+  in that session onto SFTP. Removed; `caps()` already probes properly.
+- **`window.confirm()` in a Tauri webview routes to `plugin:dialog|confirm`** and
+  needs `dialog:allow-confirm` — `dialog:default` does NOT include it. Without it
+  every delete confirmation in the app silently failed with an ACL error. Found
+  only because the log panel captured it.
+
 - **`.empty` is `position:absolute; inset:0`** and only works because `#panes` is
   `position:relative`. Reusing it in a view without a positioned ancestor anchors
   it to the VIEWPORT: it covered the whole window, nav and sidebar included, and

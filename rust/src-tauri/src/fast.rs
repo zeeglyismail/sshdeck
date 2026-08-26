@@ -143,12 +143,6 @@ pub async fn caps(cache: &CapsCache, host_id: i64, h: &Handle<Client>) -> Caps {
     c
 }
 
-/// Mark a host as unable to stream, so we stop retrying the fast path on it
-/// for the rest of the session.
-pub async fn disable(cache: &CapsCache, host_id: i64) {
-    cache.0.lock().await.insert(host_id, Caps::default());
-}
-
 /* ---------- compression decision ---------- */
 
 /// How far the sample has to shrink before compressing earns its CPU.
