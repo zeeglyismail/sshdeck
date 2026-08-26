@@ -6,6 +6,7 @@ mod crypto;
 mod db;
 mod export;
 mod fast;
+mod log;
 mod portability;
 mod sftp;
 mod ssh;
@@ -426,6 +427,7 @@ fn main() {
         .manage(ssh::SshPool::default())
         .manage(sftp::Transfers::default())
         .manage(fast::CapsCache::default())
+        .manage(log::Logs::default())
         .manage(tunnels::Active::default())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("app data dir");
@@ -451,7 +453,8 @@ fn main() {
             portability::import_backup, portability::factory_reset,
             export::export_backup, export::export_mobaconf, export::import_mobaconf,
             ssh::pool_release,
-            stash::stash_begin, stash::stash_append, stash::stash_cleanup
+            stash::stash_begin, stash::stash_append, stash::stash_cleanup,
+            log::logs_list, log::logs_clear, log::log_add, log::logs_save
         ])
         .run(tauri::generate_context!())
         .expect("error while running SSHDeck");

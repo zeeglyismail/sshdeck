@@ -14,6 +14,7 @@
       <button data-view="terms" class="nav-btn active">Terminals</button>
       <button data-view="files" class="nav-btn">Files</button>
       <button data-view="tunnels" class="nav-btn">Tunnels</button>
+      <button data-view="logs" class="nav-btn">Logs<span id="log-badge" class="hidden"></span></button>
       <button data-view="settings" class="nav-btn">Settings</button>
     </nav>
     <div class="top-right"></div>
@@ -92,6 +93,25 @@
           <p class="muted" id="tun-hint"></p>
           <div><button id="tun-add" class="btn-primary">Save tunnel</button></div>
         </div>
+      </section>
+
+      <section id="view-logs" class="view">
+        <div id="logbar">
+          <div class="log-filters">
+            <button class="log-lv active" data-lv="all">All</button>
+            <button class="log-lv" data-lv="error">Errors</button>
+            <button class="log-lv" data-lv="warn">Warnings</button>
+            <button class="log-lv" data-lv="info">Info</button>
+          </div>
+          <input id="log-find" placeholder="filter messages…" spellcheck="false">
+          <label class="chk inline"><input type="checkbox" id="log-follow" checked> follow</label>
+          <span class="spacer"></span>
+          <button id="log-copy" class="btn-ghost small">Copy</button>
+          <button id="log-save" class="btn-ghost small">Save…</button>
+          <button id="log-clear" class="btn-ghost small">Clear</button>
+        </div>
+        <div id="loglist"></div>
+        <div id="log-empty" class="empty"><p>Nothing logged yet. Errors and warnings from every part of the app land here.</p></div>
       </section>
 
       <section id="view-settings" class="view">

@@ -63,6 +63,9 @@ everything that differs. Owner's reaction to M1: "feels super smooth".
 - [x] mobaconf import/export + sshdeck-backup.json import/export (`export.rs`) — M5
 - [x] **Accelerated large-file transfers** (`fast.rs`) — M6. Owner's workload is
       14 GB DB dumps and 300 GB VHDX images.
+- [x] **Log panel** (`log.rs` + Logs nav tab) — M7. One place every feature
+      reports errors/warnings; added because transfer failures were only visible
+      live and anything not caught in the moment was lost.
 - [ ] `tar` streaming for directories of many small files — the other half of the
       transfer problem (per-file SFTP round trips), NOT built yet
 - [ ] X11 forwarding via user-installed VcXsrv — post-M5, optional
@@ -125,6 +128,23 @@ a plain exec channel instead: `tail -c +N | zstd -1 -c` for reads,
 - **Every failure falls back to SFTP** and marks the host via `fast::disable`, so a
   restricted shell or a missing tool degrades instead of erroring. Streamed
   transfers are size-verified afterwards, since there is no per-chunk ack.
+
+## Log panel (`log.rs`, M7)
+
+`log::{error,warn,info}(&app, src, msg)` from anywhere with an `AppHandle`;
+pushes onto a 3000-entry ring and emits a `log` event. The frontend mirrors it in
+`LOG[]`, filters by level and text, and reports its own failures through
+`log_add` (plus `window.onerror` / `unhandledrejection`), so JS and Rust problems
+interleave in the right order. `logs_save` writes plain text via the same save
+dialog as the backup export.
+
+- In memory only. Nothing hits disk unless the owner saves it — entries carry
+  host names and paths.
+- The transfer lifecycle is instrumented deliberately: start (size + chosen
+  method), fast-path fallback with the reason, stall, and failure with bytes
+  moved, elapsed time and the remote's own message. That is the trail needed for
+  the still-unexplained "Channel send error" near the end of a transfer.
+- Errors bump a badge on the nav tab; opening the panel clears it.
 
 ## Gotchas learned the hard way
 

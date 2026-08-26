@@ -217,7 +217,7 @@ async function moveHost(hostId, folderId) {
 }
 async function moveFolder(folderId, parentId) {
   try { await invoke("folder_move", { id: folderId, parentId }); loadState(); }
-  catch (e) { alert(e); }
+  catch (e) { logUi("ui", e); alert(e); }
 }
 function folderHasMatch(id, match) {
   if (STATE.hosts.some(h => h.folder_id === id && match(h))) return true;
@@ -1231,6 +1231,120 @@ function showView(name) {
   if (name === "terms" && activeTab) setTimeout(fitActive, 10);
   if (name === "tunnels") loadTunnels();
   if (name === "files") renderPaneHostOptions();
+  if (name === "logs") { logUnseen = 0; logBadge(); renderLogs(); }
+}
+
+
+/* ---------- log panel ----------
+ *
+ * Every part of the app reports here: Rust pushes `log` events, the frontend
+ * funnels its own failures through logUi(). Errors used to surface as an alert
+ * or a red transfer row and then vanish, so anything you did not catch live was
+ * lost — which is exactly the position we were in chasing the transfer stalls.
+ */
+const LOG = [];
+const LOG_CAP = 3000;
+let logLevel = "all";
+let logQuery = "";
+let logUnseen = 0;
+
+function logMatches(e) {
+  if (logLevel !== "all" && e.level !== logLevel) return false;
+  if (!logQuery) return true;
+  const q = logQuery.toLowerCase();
+  return e.msg.toLowerCase().includes(q) || e.src.toLowerCase().includes(q);
+}
+
+function logTime(ms) {
+  const d = new Date(ms);
+  const p = n => String(n).padStart(2, "0");
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+}
+
+function logRow(e) {
+  const el = document.createElement("div");
+  el.className = "log-row " + e.level;
+  el.innerHTML = `<span class="log-ts">${logTime(e.ts)}</span>` +
+    `<span class="log-lvl">${esc(e.level)}</span>` +
+    `<span class="log-src">${esc(e.src)}</span>` +
+    `<span class="log-msg">${esc(e.msg)}</span>`;
+  return el;
+}
+
+function renderLogs() {
+  const list = $("#loglist");
+  const rows = LOG.filter(logMatches);
+  $("#log-empty").classList.toggle("hidden", rows.length > 0);
+  list.innerHTML = "";
+  // only the tail is worth drawing; thousands of rows would stall the view
+  for (const e of rows.slice(-1000)) list.appendChild(logRow(e));
+  if ($("#log-follow").checked) list.scrollTop = list.scrollHeight;
+}
+
+function logBadge() {
+  const b = $("#log-badge");
+  b.classList.toggle("hidden", logUnseen === 0);
+  b.textContent = logUnseen > 99 ? "99+" : String(logUnseen);
+}
+
+function addLog(e) {
+  LOG.push(e);
+  if (LOG.length > LOG_CAP) LOG.shift();
+  const onLogs = $("#view-logs").classList.contains("active");
+  if (!onLogs && e.level === "error") { logUnseen++; logBadge(); }
+  if (onLogs) {
+    if (logMatches(e)) {
+      const list = $("#loglist");
+      $("#log-empty").classList.add("hidden");
+      list.appendChild(logRow(e));
+      if ($("#log-follow").checked) list.scrollTop = list.scrollHeight;
+    }
+  }
+}
+
+/* the frontend's own problems go to the same place, in the same order */
+function logUi(src, e) {
+  const msg = e && e.message ? e.message : String(e);
+  invoke("log_add", { level: "error", src, msg }).catch(() => {});
+}
+window.addEventListener("error", ev => logUi("ui", ev.message || ev.error));
+window.addEventListener("unhandledrejection", ev => logUi("ui", ev.reason));
+
+listen("log", ev => addLog(ev.payload));
+listen("logs-reset", () => { LOG.length = 0; logUnseen = 0; logBadge(); renderLogs(); });
+
+$$(".log-lv").forEach(b => b.onclick = () => {
+  $$(".log-lv").forEach(x => x.classList.toggle("active", x === b));
+  logLevel = b.dataset.lv;
+  renderLogs();
+});
+$("#log-find").oninput = e => { logQuery = e.target.value.trim(); renderLogs(); };
+$("#log-clear").onclick = () => invoke("logs_clear");
+$("#log-copy").onclick = async () => {
+  const text = LOG.filter(logMatches)
+    .map(e => `${logTime(e.ts)} [${e.level}] ${e.src}: ${e.msg}`).join(NEWLINE);
+  try { await navigator.clipboard.writeText(text); flashOk($("#log-copy")); }
+  catch (err) { logUi("ui", err); }
+};
+$("#log-save").onclick = async () => {
+  try {
+    const path = await window.__TAURI__.dialog.save({
+      title: "Save log", defaultPath: "sshdeck-log.txt",
+      filters: [{ name: "Text", extensions: ["txt", "log"] }],
+    });
+    if (!path) return;
+    await invoke("logs_save", { path });
+    flashOk($("#log-save"));
+  } catch (e) { logUi("ui", e); }
+};
+
+async function loadLogs() {
+  try {
+    const rows = await invoke("logs_list");
+    LOG.length = 0;
+    LOG.push(...rows);
+    renderLogs();
+  } catch (e) { /* the panel is a diagnostic, never a blocker */ }
 }
 
 /* ---------- host modal ---------- */
@@ -1308,7 +1422,7 @@ $("#hm-save").onclick = async () => {
     await invoke("host_save", args);
     $("#modal-bg").classList.add("hidden");
     loadState();
-  } catch (e) { alert(e); }
+  } catch (e) { logUi("ui", e); alert(e); }
 };
 
 $("#hm-delete").onclick = async () => {
@@ -1342,11 +1456,11 @@ function renderIdentities() {
       try {
         await invoke("identity_save", { id: i.id, name: i.name, username: i.username, password: pw });
         alert("Updated");
-      } catch (e) { alert(e); }
+      } catch (e) { logUi("ui", e); alert(e); }
     };
     item.querySelector(".del").onclick = async () => {
       if (!await confirmCredDelete("identity", i.name, i.id)) return;
-      try { await invoke("identity_delete", { id: i.id }); loadState(); } catch (e) { alert(e); }
+      try { await invoke("identity_delete", { id: i.id }); loadState(); } catch (e) { logUi("ui", e); alert(e); }
     };
     el.appendChild(item);
   }
@@ -1370,7 +1484,7 @@ function renderKeys() {
     item.innerHTML = `<span class="kname">🔑 ${esc(k.name)}</span><button class="btn-danger small">Delete</button>`;
     item.querySelector("button").onclick = async () => {
       if (!await confirmCredDelete("key", k.name, k.id)) return;
-      try { await invoke("key_delete", { id: k.id }); loadState(); } catch (e) { alert(e); }
+      try { await invoke("key_delete", { id: k.id }); loadState(); } catch (e) { logUi("ui", e); alert(e); }
     };
     el.appendChild(item);
   }
@@ -1750,7 +1864,7 @@ function buildPane(paneEl, i) {
     const host = hostById(P.hostId);
     for (const f of [].concat(files))
       await invoke("sftp_upload", { hostId: P.hostId, localPath: f, remoteDir: P.path, hostLabel: host.label, ...fastOpts() })
-        .catch(e => alert(e));
+        .catch(e => { logUi("ui", e); alert(e); });
   };
   paneEl.querySelector(".dl").onclick = async () => {
     const sel = selected().filter(e => !e.is_dir);
@@ -1760,7 +1874,7 @@ function buildPane(paneEl, i) {
       const dest = await window.__TAURI__.dialog.save({ defaultPath: e.name, title: "Save " + e.name });
       if (!dest) continue;
       await invoke("sftp_download", { hostId: P.hostId, remotePath: joinPath(P.path, e.name), localPath: dest, hostLabel: host.label, ...fastOpts() })
-        .catch(e2 => alert(e2));
+        .catch(e2 => { logUi("ui", e2); alert(e2); });
     }
   };
   paneEl.querySelector(".mkdir").onclick = async () => {
@@ -1768,7 +1882,7 @@ function buildPane(paneEl, i) {
     const name = prompt("New directory name:");
     if (!name) return;
     try { await invoke("sftp_mkdir", { hostId: P.hostId, path: joinPath(P.path, name) }); load(); }
-    catch (e) { alert(e); }
+    catch (e) { logUi("ui", e); alert(e); }
   };
   paneEl.querySelector(".rename").onclick = async () => {
     const sel = selected();
@@ -1778,7 +1892,7 @@ function buildPane(paneEl, i) {
     try {
       await invoke("sftp_rename", { hostId: P.hostId, path: joinPath(P.path, sel[0].name), newPath: joinPath(P.path, name) });
       load();
-    } catch (e) { alert(e); }
+    } catch (e) { logUi("ui", e); alert(e); }
   };
   paneEl.querySelector(".chmod").onclick = async () => {
     const sel = selected();
@@ -1788,7 +1902,7 @@ function buildPane(paneEl, i) {
     try {
       for (const e of sel) await invoke("sftp_chmod", { hostId: P.hostId, path: joinPath(P.path, e.name), mode });
       load();
-    } catch (e) { alert(e); }
+    } catch (e) { logUi("ui", e); alert(e); }
   };
   paneEl.querySelector(".del").onclick = async () => {
     const sel = selected();
@@ -1798,7 +1912,7 @@ function buildPane(paneEl, i) {
     try {
       for (const e of sel) await invoke("sftp_delete", { hostId: P.hostId, path: joinPath(P.path, e.name), isDir: e.is_dir });
       load();
-    } catch (e) { alert(e); }
+    } catch (e) { logUi("ui", e); alert(e); }
   };
 
   paneEl.addEventListener("dragover", ev => {
@@ -1834,7 +1948,7 @@ function buildPane(paneEl, i) {
       await invoke("transfer_start", {
         srcHostId: d.hostId, srcPath: item.path, dstHostId: P.hostId, dstDir: P.path,
         isDir: item.is_dir, srcLabel: src.label, dstLabel: dst.label, ...fastOpts(),
-      }).catch(e => alert(e));
+      }).catch(e => { logUi("ui", e); alert(e); });
   });
 }
 
@@ -2003,7 +2117,7 @@ async function loadTunnels() {
         if (t.active) await invoke("tunnel_stop", { id: t.id });
         else await invoke("tunnel_start", { id: t.id });
         loadTunnels();
-      } catch (e) { alert(e); }
+      } catch (e) { logUi("ui", e); alert(e); }
     };
     item.querySelector(".del").onclick = async () => {
       if (!confirm(`Delete tunnel "${t.name}"?`)) return;
@@ -2045,7 +2159,7 @@ $("#tun-add").onclick = async () => {
     await invoke("tunnel_save", args);
     $("#tun-name").value = $("#tun-lport").value = $("#tun-dport").value = "";
     loadTunnels();
-  } catch (e) { alert(e); }
+  } catch (e) { logUi("ui", e); alert(e); }
 };
 
 /* ---------- preferences: cursor, safety ---------- */
@@ -2092,7 +2206,7 @@ $("#factory-reset").onclick = async () => {
   try {
     localStorage.clear();
     await invoke("factory_reset");
-  } catch (e) { alert(e); }
+  } catch (e) { logUi("ui", e); alert(e); }
 };
 
 /* ---------- import web backup ---------- */
@@ -2176,6 +2290,7 @@ document.addEventListener("click", e => {
 
 /* ---------- boot ---------- */
 
+loadLogs();
 try { applyTheme(JSON.parse(localStorage.getItem("deck.theme")) || PRESETS.zeegly, false); }
 catch (e) { applyTheme(PRESETS.zeegly, false); }
 loadState();

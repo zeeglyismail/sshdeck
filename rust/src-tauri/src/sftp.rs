@@ -1,4 +1,5 @@
 ﻿use crate::fast;
+use crate::log;
 use crate::ssh::{pooled, Client, SshPool};
 use russh::client::Handle;
 use russh_sftp::client::SftpSession;
@@ -334,6 +335,17 @@ fn finish(
         Ok(()) => {
             prog.status = "done".into();
             prog.resumable = false;
+            log::info(
+                app,
+                "transfer",
+                format!(
+                    "done: {} — {} in {:.1}s via {}",
+                    prog.desc,
+                    prog.done,
+                    prog.elapsed_ms as f64 / 1000.0,
+                    prog.method
+                ),
+            );
         }
         Err(ref e) if e == fast::PAUSED => match reason {
             fast::CANCEL => {
@@ -344,6 +356,11 @@ fn finish(
                 prog.status = "error".into();
                 prog.error = Some("stalled — no data for 90s".into());
                 prog.resumable = prog.done > 0;
+                log::error(
+                    app,
+                    "transfer",
+                    format!("stalled at {} of {:?}: {}", prog.done, prog.total, prog.desc),
+                );
             }
             _ => {
                 prog.status = "paused".into();
@@ -354,6 +371,19 @@ fn finish(
             prog.status = "error".into();
             // only worth offering a resume if we actually moved something
             prog.resumable = prog.done > 0;
+            log::error(
+                app,
+                "transfer",
+                format!(
+                    "failed at {} of {:?} via {} after {:.1}s: {} — {}",
+                    prog.done,
+                    prog.total,
+                    prog.method,
+                    prog.elapsed_ms as f64 / 1000.0,
+                    e,
+                    prog.desc
+                ),
+            );
             prog.error = Some(e);
         }
     }
@@ -594,6 +624,11 @@ async fn run_between(
         };
         prog.total = if is_dir { None } else { Some(size) };
         prog.method = plan.method.clone();
+        log::info(
+            &app,
+            "transfer",
+            format!("start: {} — {} bytes via {}", prog.desc, size, prog.method),
+        );
         {
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
@@ -611,6 +646,15 @@ async fn run_between(
 
         // any fast-path failure falls back to SFTP rather than surfacing an error
         if plan.fast && result.is_err() && !is_paused(&result) {
+            log::warn(
+                &app,
+                "transfer",
+                format!(
+                    "fast path failed, retrying over SFTP: {} — {}",
+                    result.as_ref().err().cloned().unwrap_or_default(),
+                    prog.desc
+                ),
+            );
             fast::disable(&cache, dst_host_id).await;
             done.store(0, Ordering::Relaxed);
             prog.method = "sftp".into();
@@ -830,6 +874,11 @@ async fn run_download(
         .await;
         prog.total = Some(size);
         prog.method = plan.method.clone();
+        log::info(
+            &app,
+            "transfer",
+            format!("start: {} — {} bytes via {}", prog.desc, size, prog.method),
+        );
         {
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
@@ -843,6 +892,15 @@ async fn run_download(
             Err("__sftp__".into())
         };
         if plan.fast && result.is_err() && !is_paused(&result) {
+            log::warn(
+                &app,
+                "transfer",
+                format!(
+                    "fast path failed, retrying over SFTP: {} — {}",
+                    result.as_ref().err().cloned().unwrap_or_default(),
+                    prog.desc
+                ),
+            );
             fast::disable(&cache, host_id).await;
             done.store(0, Ordering::Relaxed);
             result = Err("__sftp__".into());
@@ -972,6 +1030,11 @@ async fn run_upload(
         let plan = plan_for(&caps, size, fast_on, min_bytes, fast::local_ratio(&local_path, size)).await;
         prog.total = Some(size);
         prog.method = plan.method.clone();
+        log::info(
+            &app,
+            "transfer",
+            format!("start: {} — {} bytes via {}", prog.desc, size, prog.method),
+        );
         {
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
@@ -985,6 +1048,15 @@ async fn run_upload(
             Err("__sftp__".into())
         };
         if plan.fast && result.is_err() && !is_paused(&result) {
+            log::warn(
+                &app,
+                "transfer",
+                format!(
+                    "fast path failed, retrying over SFTP: {} — {}",
+                    result.as_ref().err().cloned().unwrap_or_default(),
+                    prog.desc
+                ),
+            );
             fast::disable(&cache, host_id).await;
             done.store(0, Ordering::Relaxed);
             result = Err("__sftp__".into());
