@@ -487,7 +487,14 @@ pub async fn upload(
     let read_res = reader.await.map_err(es)?;
     stream.flush().await.ok();
     // EOF tells the remote `dd` the file is complete
-    let closed = stream.shutdown().await.map_err(es);
+    // shutdown has been seen to block indefinitely when the remote stops
+    // draining, which showed up as a transfer stuck at 100% until the watchdog
+    // fired 90 s later
+    let closed = match tokio::time::timeout(std::time::Duration::from_secs(30), stream.shutdown()).await
+    {
+        Ok(r) => r.map_err(es),
+        Err(_) => Err("timed out closing the channel".to_string()),
+    };
     // wait for the remote command to exit before we trust the result
     settle(drain).await;
     if stopped(&cancel) {

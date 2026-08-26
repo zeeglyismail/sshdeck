@@ -478,7 +478,9 @@ const PREFS = {
   scrollback: parseInt(localStorage.getItem("deck.scrollback")) || 50000,   // phase | blink | steady
   warnCloseTab: localStorage.getItem("deck.warnCloseTab") !== "0",
   warnQuit: localStorage.getItem("deck.warnQuit") !== "0",
-  fastTransfer: localStorage.getItem("deck.fastTransfer") !== "0",
+  // OFF by default: the streaming path can lose the tail of a transfer, and a
+  // database dump that is silently 2 MB short is far worse than a slow one.
+  fastTransfer: localStorage.getItem("deck.fastTransfer") === "1",
   fastMinMb: parseInt(localStorage.getItem("deck.fastMinMb")) || 64,
 };
 // passed to every transfer command so the Rust side knows which path to pick

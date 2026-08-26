@@ -98,7 +98,28 @@ Icons in `src-tauri/icons/` (32/128/128@2x png + multi-size ico) are generated,
 not hand-drawn; bundle config lives in `tauri.conf.json` → `bundle` (NSIS,
 installMode currentUser = no admin prompt).
 
-## Accelerated transfers (`fast.rs`, M6)
+## Accelerated transfers (`fast.rs`, M6) — OFF BY DEFAULT, UNSOLVED
+
+**SFTP is the default path again (v1.6.0).** The owner's words: "i will not even
+trust this when i move db dump". That is the correct call — this is used for
+database dumps and disk images, and a silently short file is far worse than a
+slow one.
+
+**The unsolved bug**: on the owner's host05 the streamed path loses roughly one
+SSH window (~2 MB) off the tail. The log proves the sending side did its job:
+`stalled at 534854426 of Some(534854426)` — every byte was read and pushed — yet
+the destination was ~2 MB short, and the finalize step either hung (watchdog
+fired at 90 s) or came back "channel closed". Ruled out against a real sshd: the
+exact filename (typographic apostrophe, `@`), shell quoting generally, disk
+contention (it fails on NVMe too), concurrency, transfer size, and a second
+transfer on a pre-opened idle connection. Suspicion is the shutdown/EOF handshake
+tearing the channel down before the remote `dd` drains its buffer, but it has
+never reproduced locally. Do NOT re-enable by default without reproducing and
+fixing it.
+
+The size check after every streamed transfer means a short one is reported as
+failed rather than passed off as complete, so the damage is bounded — but that is
+containment, not a fix.
 
 The SFTP path is strictly serial — one 512 KB chunk per round trip — so its ceiling
 is `512KB / RTT` regardless of link speed (~16 MB/s at 30 ms). `fast.rs` streams over

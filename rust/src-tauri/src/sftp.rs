@@ -666,8 +666,10 @@ async fn run_between(
             prog.method = "sftp".into();
             push_prog(&app, &list, prog.clone());
             result = async {
-                let src = open_sftp(&src_h).await?;
-                let dst = open_sftp(&dst_h).await?;
+                let src_fresh = crate::ssh::dedicated(&crate::build_spec(&app, src_host_id)?).await?;
+                let dst_fresh = crate::ssh::dedicated(&crate::build_spec(&app, dst_host_id)?).await?;
+                let src = open_sftp(&src_fresh).await?;
+                let dst = open_sftp(&dst_fresh).await?;
                 if is_dir {
                     copy_dir(&src, &dst, src_path.clone(), dest.clone(), &done, &cancel).await
                 } else {
@@ -923,7 +925,8 @@ async fn run_download(
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
             result = async {
-                let sftp = open_sftp(&handle).await?;
+                let fresh = crate::ssh::dedicated(&crate::build_spec(&app, host_id)?).await?;
+                let sftp = open_sftp(&fresh).await?;
                 let mut rf = sftp.open(&remote_path).await.map_err(es)?;
                 let mut wf = tokio::fs::File::create(&local_path).await.map_err(es)?;
                 let mut buf = vec![0u8; 512 * 1024];
@@ -1086,7 +1089,10 @@ async fn run_upload(
             let list = app.state::<Transfers>();
             push_prog(&app, &list, prog.clone());
             result = async {
-                let sftp = open_sftp(&handle).await?;
+                // the fast path usually fails because its connection died, so
+                // retrying SFTP on that same handle just fails again at 0 bytes
+                let fresh = crate::ssh::dedicated(&crate::build_spec(&app, host_id)?).await?;
+                let sftp = open_sftp(&fresh).await?;
                 let mut rf = tokio::fs::File::open(&local_path).await.map_err(es)?;
                 let mut wf = sftp.create(&dest).await.map_err(es)?;
                 let mut buf = vec![0u8; 512 * 1024];

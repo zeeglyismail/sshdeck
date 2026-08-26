@@ -161,11 +161,18 @@
             <span class="muted">history kept per terminal (default 50000)</span></label>
 
           <h3>Large transfers</h3>
+          <p class="muted"><b>SFTP is the default and is the reliable path.</b> Leave this off for anything
+          that has to be correct &mdash; database dumps, disk images, backups.</p>
           <label class="chk"><input type="checkbox" id="pref-fast">
-            Accelerated transfers &mdash; stream big files over an exec channel instead of SFTP</label>
+            Accelerated transfers (<b>experimental</b>) &mdash; stream big files over an exec channel instead of SFTP</label>
           <label class="chk">Use it for files above
             <input type="number" id="pref-fast-min" min="1" max="100000" step="1" style="width:110px"> MB
             <span class="muted">smaller files stay on SFTP, where the setup cost would outweigh the gain</span></label>
+          <p class="muted"><b>Known problem:</b> on some hosts a streamed transfer can end up short by
+          roughly the size of one SSH window (a couple of MB) even though every byte was sent, and the
+          transfer may hang at the very end. The size is always checked afterwards, so a short transfer is
+          reported as failed rather than passed off as complete &mdash; but the speed is not worth the risk
+          unless you are moving something you can re-check yourself.</p>
           <p class="muted">SFTP waits for an acknowledgement every 512&nbsp;KB, so its ceiling is <b>512&nbsp;KB &divide; round-trip time</b> &mdash; about 16&nbsp;MB/s at 30&nbsp;ms no matter how fast the link is. Streaming removes that ceiling. SSHDeck also samples the file and turns on <b>zstd</b> compression when it actually shrinks (database dumps do, packed archives do not), and writes sparsely so a mostly-empty disk image stays a hole on the destination. Needs <code>zstd</code>, GNU <code>dd</code> and <code>tail</code> on the host; anything missing falls back to SFTP automatically.</p>
 
           <h3>Backup &amp; restore</h3>
