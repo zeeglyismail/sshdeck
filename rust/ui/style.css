@@ -334,3 +334,9 @@ input[type="password"]::-ms-clear { display: none; width: 0; height: 0; }
 #version { font-family: var(--mono); font-size: 11px; color: var(--muted);
   padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px;
   user-select: text; cursor: default; }
+
+/* in-app confirmation (window.confirm is unusable — see deckConfirm) */
+#confirm-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex;
+  align-items: center; justify-content: center; z-index: 90; animation: fadeIn .14s ease; }
+.confirm-box { width: 400px; }
+.confirm-msg { line-height: 1.6; color: var(--fg); }

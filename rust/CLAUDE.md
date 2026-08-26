@@ -195,10 +195,15 @@ dialog as the backup export.
 - **A transient failure must not condemn a host.** `fast::disable` used to poison
   the caps cache on ANY failure, so one bad transfer forced every later transfer
   in that session onto SFTP. Removed; `caps()` already probes properly.
-- **`window.confirm()` in a Tauri webview routes to `plugin:dialog|confirm`** and
-  needs `dialog:allow-confirm` — `dialog:default` does NOT include it. Without it
-  every delete confirmation in the app silently failed with an ACL error. Found
-  only because the log panel captured it.
+- **NEVER use `window.confirm()`** — use `deckConfirm()` in `app.js`.
+  tauri-plugin-dialog 2.7.2 injects an override that calls `plugin:dialog|confirm`,
+  a command it does NOT register (only `open`/`save`/`message` exist), so it always
+  fails the ACL. `dialog:allow-confirm` cannot help: the plugin's own manifest
+  documents it as "DEPRECATED, now an alias to allow-message". Worse, the override
+  is `async`, so it returns a Promise — and a Promise is truthy, which means
+  `if (!confirm(...)) return;` NEVER returned and every delete in the app ran with
+  no confirmation at all. `deckConfirm` is an in-theme modal resolving to a real
+  boolean. `window.alert` is fine: it maps to `message`, which is registered.
 
 - **`.empty` is `position:absolute; inset:0`** and only works because `#panes` is
   `position:relative`. Reusing it in a view without a positioned ancestor anchors

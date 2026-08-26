@@ -267,7 +267,7 @@ function renderTree() {
           if (copy) openHostModal(copy);
         } },
       { label: "Delete", danger: true, fn: async () => {
-          if (!confirm(`Delete host "${h.label}"?`)) return;
+          if (!await deckConfirm(`Delete host "${h.label}"?`)) return;
           await invoke("host_delete", { id: h.id });
           loadState();
         } },
@@ -1384,6 +1384,47 @@ async function loadLogs() {
   } catch (e) { /* the panel is a diagnostic, never a blocker */ }
 }
 
+/* ---------- confirmation dialog ----------
+ *
+ * NOT window.confirm(). tauri-plugin-dialog overrides it with an async function
+ * that calls `plugin:dialog|confirm` — a command the plugin does not actually
+ * register (only open/save/message exist), so it always fails the ACL. Worse,
+ * because the override returns a Promise, `if (!confirm(...))` is always false:
+ * every delete in the app was running WITHOUT asking. This asks, in-theme, and
+ * resolves to a real boolean.
+ */
+function deckConfirm(message, okText = "Delete") {
+  return new Promise(resolve => {
+    const bg = document.createElement("div");
+    bg.id = "confirm-bg";
+    bg.innerHTML = `<div class="modal confirm-box">
+      <p class="confirm-msg"></p>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button class="btn-ghost c-no">Cancel</button>
+        <button class="btn-danger c-yes"></button>
+      </div></div>`;
+    bg.querySelector(".confirm-msg").textContent = message;
+    bg.querySelector(".c-yes").textContent = okText;
+    const finish = v => {
+      document.removeEventListener("keydown", onKey, true);
+      bg.remove();
+      resolve(v);
+    };
+    const onKey = e => {
+      if (e.key === "Escape") { e.stopPropagation(); finish(false); }
+      else if (e.key === "Enter") { e.stopPropagation(); finish(true); }
+    };
+    bg.querySelector(".c-no").onclick = () => finish(false);
+    bg.querySelector(".c-yes").onclick = () => finish(true);
+    bg.onclick = e => { if (e.target === bg) finish(false); };
+    // capture, so a focused terminal does not swallow Escape
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(bg);
+    bg.querySelector(".c-no").focus();
+  });
+}
+
 /* ---------- host modal ---------- */
 
 let editingHost = null;
@@ -1463,7 +1504,8 @@ $("#hm-save").onclick = async () => {
 };
 
 $("#hm-delete").onclick = async () => {
-  if (!editingHost || !confirm(`Delete host "${editingHost.label}"?`)) return;
+  if (!editingHost) return;
+  if (!await deckConfirm(`Delete host "${editingHost.label}"?`)) return;
   await invoke("host_delete", { id: editingHost.id });
   $("#modal-bg").classList.add("hidden");
   loadState();
@@ -1945,7 +1987,7 @@ function buildPane(paneEl, i) {
     const sel = selected();
     if (!sel.length) return alert("Select file(s) first");
     const label = sel.length === 1 ? `"${sel[0].name}"` : `${sel.length} items`;
-    if (!confirm(`Delete ${label}?`)) return;
+    if (!await deckConfirm(`Delete ${label}?`)) return;
     try {
       for (const e of sel) await invoke("sftp_delete", { hostId: P.hostId, path: joinPath(P.path, e.name), isDir: e.is_dir });
       load();
@@ -2157,7 +2199,7 @@ async function loadTunnels() {
       } catch (e) { logUi("ui", e); alert(e); }
     };
     item.querySelector(".del").onclick = async () => {
-      if (!confirm(`Delete tunnel "${t.name}"?`)) return;
+      if (!await deckConfirm(`Delete tunnel "${t.name}"?`)) return;
       await invoke("tunnel_delete", { id: t.id });
       loadTunnels();
     };
