@@ -1231,7 +1231,12 @@ function showView(name) {
   if (name === "terms" && activeTab) setTimeout(fitActive, 10);
   if (name === "tunnels") loadTunnels();
   if (name === "files") renderPaneHostOptions();
-  if (name === "logs") { logUnseen = 0; logBadge(); renderLogs(); }
+  if (name === "logs") {
+    logUnseen = 0;
+    logBadge();
+    // never let a rendering fault take the window with it
+    try { renderLogs(); } catch (e) { $("#loglist").textContent = "log view failed: " + e; }
+  }
 }
 
 
@@ -1271,13 +1276,17 @@ function logRow(e) {
   return el;
 }
 
+const LOG_ROWS_MAX = 500;
+
 function renderLogs() {
   const list = $("#loglist");
   const rows = LOG.filter(logMatches);
   $("#log-empty").classList.toggle("hidden", rows.length > 0);
-  list.innerHTML = "";
-  // only the tail is worth drawing; thousands of rows would stall the view
-  for (const e of rows.slice(-1000)) list.appendChild(logRow(e));
+  // build off-document, then swap in once — a thousand appendChild calls into a
+  // live scrolling container is a lot of layout work for no reason
+  const frag = document.createDocumentFragment();
+  for (const e of rows.slice(-LOG_ROWS_MAX)) frag.appendChild(logRow(e));
+  list.replaceChildren(frag);
   if ($("#log-follow").checked) list.scrollTop = list.scrollHeight;
 }
 
@@ -1287,25 +1296,51 @@ function logBadge() {
   b.textContent = logUnseen > 99 ? "99+" : String(logUnseen);
 }
 
+/* Repainting per event would mean one forced layout per arrival; a burst of
+   them while the panel is open would crawl. Coalesce into one frame instead. */
+let logPending = false;
+function scheduleLogRender() {
+  if (logPending) return;
+  logPending = true;
+  requestAnimationFrame(() => {
+    logPending = false;
+    if ($("#view-logs").classList.contains("active")) renderLogs();
+  });
+}
+
 function addLog(e) {
   LOG.push(e);
   if (LOG.length > LOG_CAP) LOG.shift();
-  const onLogs = $("#view-logs").classList.contains("active");
-  if (!onLogs && e.level === "error") { logUnseen++; logBadge(); }
-  if (onLogs) {
-    if (logMatches(e)) {
-      const list = $("#loglist");
-      $("#log-empty").classList.add("hidden");
-      list.appendChild(logRow(e));
-      if ($("#log-follow").checked) list.scrollTop = list.scrollHeight;
-    }
-  }
+  if ($("#view-logs").classList.contains("active")) scheduleLogRender();
+  else if (e.level === "error") { logUnseen++; logBadge(); }
 }
 
-/* the frontend's own problems go to the same place, in the same order */
+/* The frontend's own problems go to the same place, in the same order.
+ *
+ * The guard matters: reporting an error round-trips through Rust and comes back
+ * as a `log` event, which renders. If rendering ever threw, that would raise
+ * another error, report it, render again — a feedback loop that would spin
+ * forever and freeze the window. Reporting can never trigger reporting. */
+let logReporting = false;
+const logRate = { since: 0, n: 0, last: "" };
+const LOG_UI_PER_SEC = 20;
+
 function logUi(src, e) {
+  if (logReporting) return;
   const msg = e && e.message ? e.message : String(e);
-  invoke("log_add", { level: "error", src, msg }).catch(() => {});
+  const now = Date.now();
+  if (now - logRate.since > 1000) { logRate.since = now; logRate.n = 0; }
+  // A fault that repeats every frame would otherwise flood the buffer and the
+  // IPC channel with the same line. Drop repeats and cap the rate; the first
+  // occurrence is the one worth keeping anyway.
+  if (msg === logRate.last && logRate.n > 0) return;
+  if (++logRate.n > LOG_UI_PER_SEC) return;
+  logRate.last = msg;
+  logReporting = true;
+  try {
+    invoke("log_add", { level: "error", src, msg }).catch(() => {});
+  } catch (_) { /* the logger must never be the thing that breaks */ }
+  logReporting = false;
 }
 window.addEventListener("error", ev => logUi("ui", ev.message || ev.error));
 window.addEventListener("unhandledrejection", ev => logUi("ui", ev.reason));

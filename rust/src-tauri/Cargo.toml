@@ -1,6 +1,6 @@
 [package]
 name = "sshdeck-desktop"
-version = "1.5.0"
+version = "1.5.1"
 description = "SSHDeck native desktop client"
 edition = "2021"
 

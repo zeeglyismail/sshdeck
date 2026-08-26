@@ -77,26 +77,32 @@ pub fn info(app: &AppHandle, src: &str, msg: impl Into<String>) {
     push(app, INFO, src, msg);
 }
 
+/// All four commands are `async` deliberately. A synchronous Tauri command runs
+/// on the main thread, which is also the window message loop — and one that
+/// emits an event from there can wedge the entire window, which presents as the
+/// app freezing with no click response at all.
 #[tauri::command]
-pub fn logs_list(logs: State<'_, Logs>) -> Vec<Entry> {
-    logs.buf.lock().unwrap().iter().cloned().collect()
+pub async fn logs_list(logs: State<'_, Logs>) -> Result<Vec<Entry>, ()> {
+    Ok(logs.buf.lock().unwrap().iter().cloned().collect())
 }
 
 #[tauri::command]
-pub fn logs_clear(app: AppHandle, logs: State<'_, Logs>) {
+pub async fn logs_clear(app: AppHandle, logs: State<'_, Logs>) -> Result<(), ()> {
     logs.buf.lock().unwrap().clear();
     let _ = app.emit("logs-reset", ());
+    Ok(())
 }
 
 /// The frontend reports its own failures through here, so a JS error and a
 /// backend error end up in the same list in the right order.
 #[tauri::command]
-pub fn log_add(app: AppHandle, level: String, src: String, msg: String) {
+pub async fn log_add(app: AppHandle, level: String, src: String, msg: String) -> Result<(), ()> {
     push(&app, &level, &src, msg);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn logs_save(logs: State<'_, Logs>, path: String) -> Result<usize, String> {
+pub async fn logs_save(logs: State<'_, Logs>, path: String) -> Result<usize, String> {
     let lines: Vec<String> = logs
         .buf
         .lock()

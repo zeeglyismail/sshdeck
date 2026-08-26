@@ -145,6 +145,15 @@ dialog as the backup export.
   moved, elapsed time and the remote's own message. That is the trail needed for
   the still-unexplained "Channel send error" near the end of a transfer.
 - Errors bump a badge on the nav tab; opening the panel clears it.
+- **All four log commands are `async` on purpose.** A synchronous Tauri command
+  runs on the MAIN thread, which is also the window message loop; one that emits
+  an event from there can wedge the whole window — indistinguishable from the app
+  hanging with no click response. Never make a command that emits synchronous.
+- Three more guards, because the logger must never be what breaks the app:
+  `logReporting` stops report → render → error → report recursion; `logUi` is
+  rate-limited (20/s, consecutive duplicates dropped) so a fault repeating every
+  frame cannot flood IPC; and renders coalesce into one `requestAnimationFrame`
+  instead of forcing layout per arriving event.
 
 ## Gotchas learned the hard way
 
