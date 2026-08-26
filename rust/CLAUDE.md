@@ -150,6 +150,11 @@ a plain exec channel instead: `tail -c +N | zstd -1 -c` for reads,
   Several big streams at one spinning disk seek against each other until
   throughput collapses — that is how two uploads wedged at half done. Queueing
   also matches MobaXterm, and queued rows show as `queued` and stay cancellable.
+- **`run_command` had NO timeout** and every small query goes through it (stat,
+  capability probe, compression sample, the post-transfer size verify). An upload
+  that had sent every byte could sit at "running" forever because the `stat` that
+  confirms the size never returned. 30 s cap now; a non-answer is reported as
+  "could not confirm" (resumable), never as "file missing".
 - **A stalled stream must not look alive.** `start_ticker` watches for 90 s with no
   bytes and trips the cancel flag with `STALL`, so the row errors (and stays
   resumable) instead of sitting at 99% forever.

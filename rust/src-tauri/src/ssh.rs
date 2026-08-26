@@ -268,16 +268,29 @@ pub fn spawn_session(app: AppHandle, sessions: &SshSessions, id: u32, spec: Conn
     });
 }
 
+/// Longest we will wait on a one-shot command. Every caller here is a small
+/// query — a stat, a capability probe, a compression sample — so anything past
+/// this means the connection is wedged, not that the command is slow.
+const CMD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub(crate) async fn run_command(handle: &Handle<Client>, cmd: &str) -> Option<String> {
-    let mut channel = handle.channel_open_session().await.ok()?;
-    channel.exec(true, cmd).await.ok()?;
-    let mut out = Vec::new();
-    while let Some(msg) = channel.wait().await {
-        match msg {
-            ChannelMsg::Data { ref data } => out.extend_from_slice(data),
-            ChannelMsg::Eof | ChannelMsg::Close => break,
-            _ => {}
+    // Without this an upload that has sent every byte can sit at "running"
+    // forever: the bytes are gone, and the `stat` that confirms the size never
+    // comes back. A timeout turns that into a resumable error instead.
+    tokio::time::timeout(CMD_TIMEOUT, async {
+        let mut channel = handle.channel_open_session().await.ok()?;
+        channel.exec(true, cmd).await.ok()?;
+        let mut out = Vec::new();
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                ChannelMsg::Data { ref data } => out.extend_from_slice(data),
+                ChannelMsg::Eof | ChannelMsg::Close => break,
+                _ => {}
+            }
         }
-    }
-    Some(String::from_utf8_lossy(&out).into_owned())
+        Some(String::from_utf8_lossy(&out).into_owned())
+    })
+    .await
+    .ok()
+    .flatten()
 }

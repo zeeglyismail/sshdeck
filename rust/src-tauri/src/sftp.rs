@@ -670,7 +670,9 @@ async fn verify_remote(
     match fast::remote_size(h, path).await {
         Some(n) if n == expect => Ok(()),
         Some(n) => Err(format!("size mismatch: got {n} of {expect} bytes")),
-        None => Err("destination file missing after transfer".into()),
+        // no answer is not the same as no file: the host may simply have stopped
+        // responding, and the transfer stays resumable either way
+        None => Err("could not confirm the destination size — host did not answer".into()),
     }
 }
 
