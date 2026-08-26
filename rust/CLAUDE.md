@@ -157,6 +157,17 @@ dialog as the backup export.
 
 ## Gotchas learned the hard way
 
+- **`.empty` is `position:absolute; inset:0`** and only works because `#panes` is
+  `position:relative`. Reusing it in a view without a positioned ancestor anchors
+  it to the VIEWPORT: it covered the whole window, nav and sidebar included, and
+  ate every click. The app looked completely frozen and was in fact perfectly
+  responsive. Any view reusing `.empty` needs `position:relative` on the view,
+  and the message itself should be `pointer-events:none`.
+- **Programmatic `.click()` cannot find overlay bugs** — it fires the handler
+  regardless of what is on top. This one survived several shim runs for exactly
+  that reason. Use `document.elementFromPoint(...)` over each control and assert
+  it returns that control.
+
 - **A write-only exec channel DEADLOCKS.** SSH flow control delivers window
   adjustments on the same channel; if you only write and never read, the initial
   window is spent and nothing refills it — uploads froze at ~15 MB. Always

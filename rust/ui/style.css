@@ -300,7 +300,11 @@ input[type="password"]::-ms-reveal,
 input[type="password"]::-ms-clear { display: none; width: 0; height: 0; }
 
 /* ---------- log panel ---------- */
-#view-logs { display: none; flex-direction: column; min-height: 0; }
+/* `.empty` is position:absolute/inset:0. In the terminals view it is confined by
+   #panes{position:relative}; here it had no positioned ancestor, so it anchored
+   to the viewport and covered the whole window — nav and sidebar included —
+   swallowing every click. The app looked frozen; it was an invisible overlay. */
+#view-logs { display: none; flex-direction: column; min-height: 0; position: relative; }
 #view-logs.active { display: flex; }
 #logbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px;
   border-bottom: 1px solid var(--line, #2a2a2e); flex: none; }
@@ -324,4 +328,4 @@ input[type="password"]::-ms-clear { display: none; width: 0; height: 0; }
 .log-row.error .log-msg { color: #f0d2d4; }
 #log-badge { margin-left: 6px; background: var(--danger, #e06c75); color: #14141a;
   border-radius: 8px; padding: 0 6px; font-size: 10px; font-weight: 700; }
-#log-empty { padding-top: 40px; }
+#log-empty { padding-top: 40px; pointer-events: none; }
