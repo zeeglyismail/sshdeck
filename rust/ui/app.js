@@ -2325,6 +2325,16 @@ document.addEventListener("click", e => {
 
 /* ---------- boot ---------- */
 
+/* stamp the build into the UI and into the log, so a saved log always says
+   which version produced it */
+(async () => {
+  try {
+    const v = await invoke("app_version");
+    $("#version").textContent = "v" + v;
+    invoke("log_add", { level: "info", src: "app", msg: "SSHDeck v" + v + " started" }).catch(() => {});
+  } catch (e) { $("#version").textContent = "v?"; }
+})();
+
 loadLogs();
 try { applyTheme(JSON.parse(localStorage.getItem("deck.theme")) || PRESETS.zeegly, false); }
 catch (e) { applyTheme(PRESETS.zeegly, false); }

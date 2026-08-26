@@ -157,6 +157,12 @@ dialog as the backup export.
 
 ## Gotchas learned the hard way
 
+- **The running version is shown top-right and logged at startup** (`app_version`,
+  `env!("CARGO_PKG_VERSION")`). Two rounds were spent on "no changes" reports that
+  turned out to be an older build still installed — the giveaway was an ACL error
+  in the log that the newer build could not produce. Never debug a report without
+  confirming the version first.
+
 - **The destination outranks the transport error.** A channel that closes as the
   last bytes land still leaves a complete file; reporting that as a failure was
   simply wrong. `verify_remote`/`verify_local` now check the size FIRST and only

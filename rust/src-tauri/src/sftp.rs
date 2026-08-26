@@ -650,7 +650,9 @@ async fn run_between(
                 &app,
                 "transfer",
                 format!(
-                    "fast path failed, retrying over SFTP: {} — {}",
+                    "fast path failed after {} of {:?} bytes, retrying over SFTP: {} — {}",
+                    done.load(Ordering::Relaxed),
+                    prog.total,
                     result.as_ref().err().cloned().unwrap_or_default(),
                     prog.desc
                 ),
@@ -906,7 +908,9 @@ async fn run_download(
                 &app,
                 "transfer",
                 format!(
-                    "fast path failed, retrying over SFTP: {} — {}",
+                    "fast path failed after {} of {:?} bytes, retrying over SFTP: {} — {}",
+                    done.load(Ordering::Relaxed),
+                    prog.total,
                     result.as_ref().err().cloned().unwrap_or_default(),
                     prog.desc
                 ),
@@ -1067,7 +1071,9 @@ async fn run_upload(
                 &app,
                 "transfer",
                 format!(
-                    "fast path failed, retrying over SFTP: {} — {}",
+                    "fast path failed after {} of {:?} bytes, retrying over SFTP: {} — {}",
+                    done.load(Ordering::Relaxed),
+                    prog.total,
                     result.as_ref().err().cloned().unwrap_or_default(),
                     prog.desc
                 ),

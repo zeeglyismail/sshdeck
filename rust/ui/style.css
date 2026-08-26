@@ -329,3 +329,8 @@ input[type="password"]::-ms-clear { display: none; width: 0; height: 0; }
 #log-badge { margin-left: 6px; background: var(--danger, #e06c75); color: #14141a;
   border-radius: 8px; padding: 0 6px; font-size: 10px; font-weight: 700; }
 #log-empty { padding-top: 40px; pointer-events: none; }
+
+/* running version, top right — so "which build am I on?" is never a guess */
+#version { font-family: var(--mono); font-size: 11px; color: var(--muted);
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px;
+  user-select: text; cursor: default; }

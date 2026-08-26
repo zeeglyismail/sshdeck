@@ -419,6 +419,14 @@ fn ssh_kill(sessions: State<SshSessions>, id: u32) {
     }
 }
 
+/// The version of the running binary, baked in at compile time. Shown in the
+/// title bar and logged at startup: "am I actually running the new build?" was
+/// costing more time than the bugs were.
+#[tauri::command]
+async fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -454,7 +462,8 @@ fn main() {
             export::export_backup, export::export_mobaconf, export::import_mobaconf,
             ssh::pool_release,
             stash::stash_begin, stash::stash_append, stash::stash_cleanup,
-            log::logs_list, log::logs_clear, log::log_add, log::logs_save
+            log::logs_list, log::logs_clear, log::log_add, log::logs_save,
+            app_version
         ])
         .run(tauri::generate_context!())
         .expect("error while running SSHDeck");
