@@ -145,22 +145,42 @@ function natCompare(a, b) {
 }
 
 /* small choice dialog: resolves to the clicked button's value (null on cancel) */
+/* Only one of these at a time. Without the guard, whatever was clicked to open
+   the dialog KEPT focus behind it — so pressing Enter re-fired that button and
+   opened a second dialog on top of the first. Stacked backdrops looked like the
+   popup "getting darker", and every extra copy needed its own click. */
+let choiceOpen = false;
 function choose(title, message, buttons) {
   return new Promise(resolve => {
+    if (choiceOpen) { resolve(null); return; }
+    choiceOpen = true;
     const bg = document.createElement("div");
     bg.id = "choice-bg";
     bg.innerHTML = `<div class="modal choice"><h3>${esc(title)}</h3><p>${message}</p><div class="modal-actions"></div></div>`;
     const acts = bg.querySelector(".modal-actions");
-    const done = v => { bg.remove(); resolve(v); };
+    const done = v => {
+      document.removeEventListener("keydown", onKey, true);
+      choiceOpen = false;
+      bg.remove();
+      resolve(v);
+    };
+    const onKey = e => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(null); }
+    };
+    let primary = null;
     for (const b of buttons) {
       const btn = document.createElement("button");
       btn.className = b.cls || "btn-ghost";
       btn.textContent = b.label;
       btn.onclick = () => done(b.value);
       acts.appendChild(btn);
+      if (b.primary) primary = btn;
     }
     bg.addEventListener("mousedown", e => { if (e.target === bg) done(null); });
+    document.addEventListener("keydown", onKey, true);
     document.body.appendChild(bg);
+    // pull focus off whatever opened this, so Enter acts on the dialog
+    (primary || acts.firstChild).focus();
   });
 }
 async function confirmCredDelete(kind, name, id) {
@@ -265,6 +285,10 @@ function renderTree() {
           await loadState();
           const copy = STATE.hosts.find(x => x.id === newId);
           if (copy) openHostModal(copy);
+        } },
+      { label: "Move to folder…", fn: async () => {
+          const target = await pickFolder(h);
+          if (target !== undefined) moveHost(h.id, target);
         } },
       { label: "Delete", danger: true, fn: async () => {
           if (!await deckConfirm(`Delete host "${h.label}"?`)) return;
@@ -613,12 +637,19 @@ async function connectInst(inst) {
   }
   inst.unsubs.push(await listen(`pty-exit-${inst.id}`, () => {
     inst.dead = true;
+    logOnce(`dead-${inst.id}`, "warn", "ssh", `${inst.host.label}: session disconnected`, 0);
     t.write("\r\n\x1b[1;33m— disconnected — press Enter to reconnect —\x1b[0m\r\n");
     if (isFocused(inst)) updateConn(inst);
   }));
   inst.unsubs.push(await listen(`stats-${inst.id}`, ev => {
     const s = parseStats(ev.payload, inst.prev);
-    if (!s) return;
+    if (!s) {
+      // the bar just freezes otherwise, with no hint why
+      const n = String(ev.payload || "").split("@@").length;
+      logOnce(`stats-parse-${inst.id}`, "warn", "stats",
+        `${inst.host.label}: monitoring output was incomplete (${n} of 9 sections) — values will hold at their last reading`);
+      return;
+    }
     inst.stats = s;
     inst.cpuHist.push(s.cpu); if (inst.cpuHist.length > 60) inst.cpuHist.shift();
     inst.netHist.push({ rx: s.rx_rate, tx: s.tx_rate }); if (inst.netHist.length > 60) inst.netHist.shift();
@@ -894,6 +925,82 @@ async function splitActive(source, dir) {
   inst.term.focus();
 }
 
+/* Pick a destination folder for a host. Dragging works, but with a few dozen
+   hosts and nested folders it means scrolling both ends into view at once.
+   Resolves to a folder id, null for the root, or undefined if cancelled. */
+function pickFolder(host) {
+  return new Promise(resolve => {
+    const bg = document.createElement("div");
+    bg.id = "choice-bg";
+    bg.innerHTML = `<div class="modal choice picker"><h3>Move ${esc(host.label)}</h3>
+      <button class="btn-primary pick-root">Root (no folder)</button>
+      <input class="pick-filter" placeholder="🔍 search folder…" spellcheck="false" autocomplete="off">
+      <div class="pick-list"></div>
+      <div class="modal-actions"><button class="btn-ghost cancel">Cancel</button></div></div>`;
+    const done = v => {
+      document.removeEventListener("keydown", onKey, true);
+      bg.remove();
+      resolve(v);
+    };
+    const listEl = bg.querySelector(".pick-list");
+    const filterEl = bg.querySelector(".pick-filter");
+
+    // flatten the tree once, keeping the full path so nesting is unambiguous
+    const flat = [];
+    const walk = (parentId, trail) => {
+      for (const f of STATE.folders.filter(x => x.parent_id === parentId)) {
+        const path = trail ? trail + " / " + f.name : f.name;
+        flat.push({ id: f.id, name: f.name, path });
+        walk(f.id, path);
+      }
+    };
+    walk(null, "");
+
+    let shown = [];
+    const render = () => {
+      const q = filterEl.value.trim().toLowerCase();
+      shown = flat.filter(f => !q || f.path.toLowerCase().includes(q));
+      listEl.innerHTML = shown.length
+        ? shown.map((f, i) => `<button class="pick-row${i === 0 ? " sel" : ""}" data-i="${i}">` +
+            `<span class="pl">${esc(f.name)}</span>` +
+            `<span class="pu">${esc(f.path)}</span></button>`).join("")
+        : '<div class="fp-empty">no folder matches</div>';
+      listEl.querySelectorAll(".pick-row").forEach(b => {
+        b.onclick = () => done(shown[+b.dataset.i].id);
+      });
+    };
+    const move = d => {
+      const rows = [...listEl.querySelectorAll(".pick-row")];
+      if (!rows.length) return;
+      let i = rows.findIndex(r => r.classList.contains("sel"));
+      i = Math.max(0, Math.min(rows.length - 1, (i < 0 ? 0 : i) + d));
+      rows.forEach(r => r.classList.remove("sel"));
+      rows[i].classList.add("sel");
+      rows[i].scrollIntoView({ block: "nearest" });
+    };
+    const onKey = e => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(undefined); }
+    };
+    filterEl.oninput = render;
+    filterEl.onkeydown = e => {
+      if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+      else if (e.key === "Enter") {
+        e.preventDefault();
+        const sel = listEl.querySelector(".pick-row.sel");
+        if (sel) done(shown[+sel.dataset.i].id);
+      }
+    };
+    bg.querySelector(".pick-root").onclick = () => done(null);
+    bg.querySelector(".cancel").onclick = () => done(undefined);
+    bg.addEventListener("mousedown", e => { if (e.target === bg) done(undefined); });
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(bg);
+    render();
+    filterEl.focus();
+  });
+}
+
 /* the split-source picker: local terminal or any saved host */
 function pickSplitSource(dir) {
   return new Promise(resolve => {
@@ -989,7 +1096,7 @@ function focusInst(tab, inst) {
 async function closeInst(tab, inst) {
   if (PREFS.warnCloseTab && instAlive(inst) && inst.source.kind === "ssh") {
     const c = await choose("Close this session?", `Live SSH session to <b>${esc(inst.host.label)}</b> will be disconnected.`,
-      [{ label: "Cancel", value: null }, { label: "Close", value: "yes", cls: "btn-danger" }]);
+      [{ label: "Cancel", value: null }, { label: "Close", value: "yes", cls: "btn-danger", primary: true }]);
     if (c !== "yes") return;
   }
   disposeInst(inst);
@@ -1028,7 +1135,7 @@ async function closeTab(tab) {
   if (PREFS.warnCloseTab && live.length) {
     const c = await choose("Close this tab?",
       `${live.length} live SSH session${live.length > 1 ? "s" : ""} will be disconnected: <span class="muted mono">${live.map(i => esc(i.host.label)).join(", ")}</span>`,
-      [{ label: "Cancel", value: null }, { label: "Close", value: "yes", cls: "btn-danger" }]);
+      [{ label: "Cancel", value: null }, { label: "Close", value: "yes", cls: "btn-danger", primary: true }]);
     if (c !== "yes") return;
   }
   removeTab(tab);
@@ -1382,6 +1489,16 @@ async function loadLogs() {
     LOG.push(...rows);
     renderLogs();
   } catch (e) { /* the panel is a diagnostic, never a blocker */ }
+}
+
+/* Some things fail once a second if they fail at all (monitoring polls). Log
+   the first one, then stay quiet for a while so the panel stays readable. */
+const logSeen = new Map();
+function logOnce(key, level, src, msg, quietMs = 30000) {
+  const now = Date.now();
+  if (now - (logSeen.get(key) || 0) < quietMs) return;
+  logSeen.set(key, now);
+  invoke("log_add", { level, src, msg }).catch(() => {});
 }
 
 /* ---------- confirmation dialog ----------

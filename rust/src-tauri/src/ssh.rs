@@ -225,13 +225,40 @@ pub fn spawn_session(app: AppHandle, sessions: &SshSessions, id: u32, spec: Conn
         // stats loop on extra channels of the same connection
         let stats_handle = handle.clone();
         let stats_app = app.clone();
+        let label = format!("{}@{}", spec.username, spec.hostname);
         let stats_task = tauri::async_runtime::spawn(async move {
+            // one slow poll is not a reason to give up on the whole session
+            const MAX_MISSES: u32 = 5;
+            let mut misses: u32 = 0;
             loop {
                 match run_command(&stats_handle, STATS_CMD).await {
                     Some(text) => {
+                        if misses > 0 {
+                            crate::log::info(
+                                &stats_app,
+                                "stats",
+                                format!("{label}: monitoring recovered after {misses} missed poll(s)"),
+                            );
+                        }
+                        misses = 0;
                         let _ = stats_app.emit(&format!("stats-{id}"), text);
                     }
-                    None => break,
+                    None => {
+                        misses += 1;
+                        crate::log::warn(
+                            &stats_app,
+                            "stats",
+                            format!("{label}: no reply to the monitoring command ({misses}/{MAX_MISSES})"),
+                        );
+                        if misses >= MAX_MISSES {
+                            crate::log::error(
+                                &stats_app,
+                                "stats",
+                                format!("{label}: monitoring stopped after {MAX_MISSES} failed polls"),
+                            );
+                            break;
+                        }
+                    }
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
             }

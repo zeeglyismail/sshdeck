@@ -178,6 +178,17 @@ dialog as the backup export.
 
 ## Gotchas learned the hard way
 
+- **A modal MUST take focus, or the thing that opened it keeps it.** `choose()`
+  moved no focus and bound no keys, so after clicking a tab's close button that
+  button stayed focused: pressing Enter re-fired it and opened a SECOND dialog on
+  top. Stacked backdrops read as the popup "getting darker", and each copy needed
+  its own click. Fixed with a single-dialog guard, Escape, and focusing the
+  button marked `primary` (so Enter does what the user came to do).
+- **Never `break` out of the monitoring loop on one failed poll.** `spawn_session`
+  did, so a single missed reply killed stats for the rest of the session and the
+  bar silently froze — much more likely since `run_command` gained a 30 s timeout
+  in 1.5.4. Now tolerates 5 consecutive misses and logs every one.
+
 - **The running version is shown top-right and logged at startup** (`app_version`,
   `env!("CARGO_PKG_VERSION")`). Two rounds were spent on "no changes" reports that
   turned out to be an older build still installed — the giveaway was an ACL error
