@@ -178,7 +178,7 @@ cut -d' ' -f1 /proc/uptime; echo @@; \
 cut -d' ' -f1-3 /proc/loadavg; echo @@; \
 who; echo @@; \
 cat /proc/diskstats; echo @@; \
-ls -1 /sys/class/net/*/device 2>/dev/null | cut -d/ -f5";
+for d in /sys/class/net/*/device; do [ -e \"$d\" ] && { d=${d%/device}; echo \"${d##*/}\"; }; done 2>/dev/null";
 
 /// Spawn an interactive SSH terminal session; terminal I/O flows over
 /// the same `pty-out-{id}` / `pty-exit-{id}` events the local PTY uses,

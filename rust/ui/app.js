@@ -1224,7 +1224,16 @@ function parseStats(out, prev) {
   // bridge and on the tap. Only real hardware has /sys/class/net/<if>/device,
   // so the host tells us which those are; if it cannot, fall back to the old
   // behaviour rather than reporting nothing.
-  const physical = new Set((parts[8] || "").split(NEWLINE).map(x => x.trim()).filter(Boolean));
+  let physical = new Set((parts[8] || "").split(NEWLINE).map(x => x.trim()).filter(Boolean));
+  // Trust the list only if it names interfaces that actually exist. A list that
+  // matches nothing (which is what a broken probe produced) must fall back to
+  // counting everything, not to counting nothing.
+  const present = new Set(parts[3].split(NEWLINE).slice(2).map(l => l.split(":")[0].trim()).filter(Boolean));
+  if (physical.size && ![...physical].some(n => present.has(n))) {
+    logOnce("stats-nic-list", "warn", "stats",
+      `physical NIC list did not match any interface (${[...physical].slice(0, 4).join(", ")}) — counting all interfaces instead`);
+    physical = new Set();
+  }
   let rx = 0, tx = 0;
   for (const line of parts[3].split("\n").slice(2)) {
     const [name, rest] = line.split(":");

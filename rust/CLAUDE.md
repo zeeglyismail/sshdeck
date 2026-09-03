@@ -293,6 +293,13 @@ dialog as the backup export.
   `/proc/net/dev`: 6x inflation before, exact after. Only real hardware has
   `/sys/class/net/<if>/device`, so `STATS_CMD` asks for that list (section 9) and
   the parser filters by it, falling back to the old behaviour if it is empty.
+  **Never list that with `ls`**: `ls` on a symlink-to-directory prints the
+  directory's CONTENTS, so on a single-NIC VM the "NIC list" came out as
+  `driver/uevent/vendor`, matched nothing, and the bar read 0/0 during a
+  48 Mbit/s speedtest. Multi-NIC hosts only worked because GNU `ls` prints
+  full-path headers there. It is a pure-shell `for d in …/*/device` loop now,
+  and the parser ignores any list that names no interface actually present in
+  `/proc/net/dev` (and logs that) rather than counting nothing.
   **The web app (`static/app.js`) still has this bug** — same parser, not fixed
   there because the owner asked for desktop-only changes.
 - **`zd*` (ZFS zvols) double-count disk I/O**, as do `nbd`/`drbd`: their traffic
