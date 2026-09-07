@@ -6,8 +6,8 @@ Two editions from one repo:
 
 | | **Desktop** (Windows) | **Web** (Docker) |
 |---|---|---|
-| Install | [**Download SSHDeck v1.0.0**](https://github.com/zeeglyismail/sshdeck/releases/latest) — 2.2 MB installer, no admin needed | `docker compose up -d` → http://localhost:8022 |
-| Stack | Rust + Tauri 2 (5.7 MB exe, ~29 MB RAM, 0.3 s cold start) | FastAPI + asyncssh + SQLite |
+| Install | [**Download SSHDeck v1.6.4**](https://github.com/zeeglyismail/sshdeck/releases/latest) — 2.4 MB installer, no admin needed | `docker compose up -d` → http://localhost:8022 |
+| Stack | Rust + Tauri 2 (6.5 MB exe, ~29 MB RAM, 0.3 s cold start) | FastAPI + asyncssh + SQLite |
 | Best for | Daily driver on your machine — native window, local terminals, splits | Team/self-hosted, reachable from any browser, multi-user |
 
 ![SSHDeck desktop — split SSH sessions with MultiExec and the live monitoring bar](docs/screenshot-desktop.png)
@@ -29,17 +29,23 @@ Everything below is in **both** editions unless marked.
 - Moba-style copy/paste: select-to-copy, middle-click paste, Ctrl+Shift+C/V
 - Font zoom (Ctrl+scroll / Ctrl+±), configurable scrollback (default 50 000 lines)
 - Output highlighting — IPs, MACs, UP/DOWN keywords — auto-off inside full-screen apps, toggleable
+- **Resizable splits** — drag the divider between panes; double-click to even them out *(desktop)*
+- **Copy all** — one button copies the whole terminal, scrollback included *(desktop)*
+- Right-click a tab to **rename** it, or **duplicate** the session into a new tab *(desktop)*
 - Cursor style: bar / block / underline × phase (VS Code expand) / blink / steady *(desktop)*
 - Local terminal tabs *(desktop)*
 
 **Monitoring bar** — agentless, over the same SSH connection
 - CPU with 60-second sparkline, RAM and disk meters
-- Network up/down rates with a 60-second graph
+- Network up/down rates with a 60-second graph — counts **physical interfaces only**, so bridges and VM taps on a hypervisor aren't triple-counted
+- **Disk I/O** read/write rates with a graph — whole disks only, so partitions, LVM and ZFS zvols aren't double-counted *(desktop)*
 - Uptime, and logged-in users with per-user session counts (`ismail×2 devops`) — hover for the full `who` detail
+- Survives a slow poll: a busy host missing a reply no longer freezes the bar for the session *(desktop)*
 
 **Sessions**
-- Unlimited saved hosts in **nested folders** (any depth), instant filter, natural sorting (`base, 1, 2, … 10` — never `1, 10, 2`)
-- Drag hosts and folders between folders; right-click for rename / sub-folder / duplicate host
+- Unlimited saved hosts in **nested folders** (any depth), natural sorting (`base, 1, 2, … 10` — never `1, 10, 2`)
+- **Filter by anything** — label, hostname/IP, or username. Type an IP you found in a log and the matching row shows that IP, so "which server is this?" is answered in place
+- Drag hosts and folders between folders; right-click for rename / sub-folder / duplicate host / **move to folder** (searchable picker with full paths) *(desktop)*
 - **Identities** — save a username+password once, pin it to any number of hosts, rotate in one place
 - SSH key auth — private keys stored encrypted, never sent to the UI
 - Deleting an identity/key never blocks: hosts fall back to password auth; deleting a folder asks whether to keep or delete the hosts inside
@@ -49,6 +55,10 @@ Everything below is in **both** editions unless marked.
 - Dual-pane file manager, each pane on any host
 - **Host-to-host transfer** — drag files/directories between panes; streamed by the app, never through your PC
 - Multi-select (Ctrl/Shift+click), upload, download, mkdir, rename, chmod, recursive delete, live progress
+- **Drop files or whole folders from Explorer** into a pane — nested directories are recreated *(desktop)*
+- **Search** the current folder and below Windows-style (`.json`, `*.log`, part of a name) — server-side `find`, case-insensitive *(desktop)*
+- **Sizes** — measure every folder in the current directory (`du`), sorted biggest first with a proportional bar; for hunting down what's filling a disk *(desktop)*
+- Transfer queue with **pause / resume / cancel**, live rate and ETA; one transfer per host at a time so big copies don't seek against each other; resume picks up from where the destination got to *(desktop)*
 - Release a pane's file session without touching open terminals
 
 **Tunnels (port forwarding)**
@@ -64,11 +74,16 @@ Everything below is in **both** editions unless marked.
 - Factory reset with type-to-confirm *(desktop)*; close-warnings for live sessions *(desktop)*
 - Multi-user sign up / sign in *(web)*
 
+**Diagnostics** *(desktop)*
+- **Logs tab** — every part of the app reports here: connects, transfers (start, path chosen, bytes moved, the remote's own error message), SFTP operations, tunnels and the UI itself. Filter by level, search, copy, save to a file
+- Running version shown in the title bar and stamped at the top of every log
+- Experimental **accelerated transfers** (streamed exec channel with sampled zstd compression, sparse writes, resume) — **off by default**; SFTP is the reliable path and is used for everything unless you opt in
+
 ---
 
 ## Desktop edition (Windows)
 
-**[Download the installer →](https://github.com/zeeglyismail/sshdeck/releases/latest)** (`SSHDeck_1.0.0_x64-setup.exe`, 2.2 MB)
+**[Download the installer →](https://github.com/zeeglyismail/sshdeck/releases/latest)** (`SSHDeck_1.6.4_x64-setup.exe`, 2.4 MB)
 
 Per-user install, no admin prompt, Start-menu + desktop shortcuts, uninstaller included.
 Windows SmartScreen will warn on first run because the binary isn't code-signed — *More info → Run anyway*.
@@ -145,7 +160,8 @@ Back up both files **together** — the DB is unreadable without the key. For mo
 
 - SSH host key verification (TOFU)
 - Linux/macOS desktop builds via CI matrix
-- Transfer acceleration for very large files (streamed exec instead of SFTP)
+- Horizontal (Termius-style) session layout for large fleets
+- `tar`-streamed transfer of directories with many small files
 - Manual sort order for sessions, more built-in themes
 - X11 forwarding on desktop via a user-installed X server (VcXsrv)
 - TOTP two-factor login (web)
