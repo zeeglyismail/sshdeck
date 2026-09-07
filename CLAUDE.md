@@ -110,10 +110,23 @@ lifts hosts to parent; backup JSON + mobaconf carry paths "Parent/Child" /
    cursor style options, both-direction tunnels, local terminal, reset, warnings),
    and the evaluation gate vs the pywebview fallback.
 2. Remote / dynamic (SOCKS) forwarding on top of tunnels.
-3. Transfer acceleration (exec `cat` streaming) — **SHIPPED in the desktop app**
-   (`rust/src-tauri/src/fast.rs`, v1.3.0). Not ported to the web app; if the owner
-   asks for it there, the design carries over unchanged.
+3. Transfer acceleration (`rust/src-tauri/src/fast.rs`) — built, then made
+   **opt-in and off by default (v1.6.0)**: it loses ~one SSH window off the tail
+   on the owner's hosts and never reproduced locally. SFTP is the path for
+   everything. Details and what was ruled out are in `rust/CLAUDE.md`.
+5. Termius-style horizontal session layout for large fleets — owner is deciding.
+6. `tar`-streamed transfer for directories of many small files.
 4. SSH host key verification (currently `known_hosts=None` — LAN tool), TOTP login.
+
+## Claude Code setup (portable, in the repo)
+
+`.claude/` carries everything a fresh session needs — see `.claude/HOOKS.md`:
+- `skills/release-desktop` — the shipping procedure (`/release-desktop`).
+- `skills/test-desktop` — real-sshd and browser test rigs, with teardown (`/test-desktop`).
+- `hooks/guard.py` — blocks commit/push/build/release while a test artifact,
+  a leftover self-test hook, a version mismatch or a test container exists.
+Per-machine assistant memory holds only owner preferences and environment
+quirks; anything about the app itself belongs in these files.
 
 ## Testing hygiene — NON-NEGOTIABLE
 

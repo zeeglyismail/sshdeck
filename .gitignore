@@ -4,3 +4,7 @@ data/
 __pycache__/
 *.pyc
 .venv/
+
+# throwaway test rigs — the guard hook also blocks shipping while these exist
+rust/src-tauri/src/selftest.rs
+rust/ui/_shim_test.html

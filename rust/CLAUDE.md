@@ -377,8 +377,12 @@ Headless test recipe: build a shim page (`_shim_test.html`, stubbed
 verified splits/MultiExec/prefs with zero JS errors. Delete the shim afterwards.
 · **v1.0.0 shipped**: NSIS installer `SSHDeck_1.0.0_x64-setup.exe` (2.2 MB
 installer, 5.7 MB exe, no admin needed, per-user install).
-Next: GitHub Release + Linux CI matrix, then host-key verification (TOFU),
-mobaconf import in desktop, X11 via VcXsrv (optional).
+· **v1.6.4 is current** (2026-09-04): M6 transfers (queue, pause/resume/cancel,
+folder drops, search, Sizes), M7 Logs tab + version tag, monitoring accuracy on
+hypervisors and single-NIC VMs, in-app confirm dialog, move-to-folder, IP filter.
+Shipping and testing procedures live in `.claude/skills/`.
+Next: owner's decision on a Termius-style horizontal layout; `tar` streaming for
+many-small-file directories; host-key verification (TOFU); Linux CI matrix.
 
 ## Parity discipline (owner asked twice — do not skip)
 
