@@ -36,7 +36,7 @@ def exists(rel):
 # 1. temporary test files must never reach a commit or a build
 for rel in ("rust/src-tauri/src/selftest.rs", "rust/ui/_shim_test.html"):
     if exists(rel):
-        problems.append(f"{rel} still exists — delete it (it is a throwaway test artifact)")
+        problems.append(f"{rel} still exists - delete it (it is a throwaway test artifact)")
 
 # 2. the self-test hook in main.rs must be gone once selftest.rs is gone
 main_rs = os.path.join(root, "rust/src-tauri/src/main.rs")
@@ -44,7 +44,7 @@ if os.path.exists(main_rs):
     src = open(main_rs, encoding="utf-8", errors="replace").read()
     if "mod selftest;" in src or "--selftest-fast" in src:
         problems.append("rust/src-tauri/src/main.rs still contains the selftest hook "
-                        "(`mod selftest;` / `--selftest-fast`) — the tree will not build")
+                        "(`mod selftest;` / `--selftest-fast`) - the tree will not build")
 
 # 3. the version must agree in both places the desktop app reads it from
 def read_version(rel, pattern):
@@ -65,7 +65,7 @@ if re.search(r"cargo\s+tauri\s+build|gh\s+release\s+create|git\s+push\b", cmd):
         out = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}"],
                              capture_output=True, text=True, timeout=8).stdout
         if "sshdeck-fasttest" in out:
-            problems.append("test container sshdeck-fasttest is still present — `docker rm -f sshdeck-fasttest`")
+            problems.append("test container sshdeck-fasttest is still present - `docker rm -f sshdeck-fasttest`")
     except Exception:
         pass  # docker not available is not a reason to block
 
