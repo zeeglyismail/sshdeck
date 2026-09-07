@@ -1127,6 +1127,51 @@ async fn run_upload(
 }
 
 
+/* ---------- directory sizes (server-side `du`) ---------- */
+
+#[derive(Serialize)]
+pub struct DuEntry {
+    name: String,
+    bytes: u64,
+}
+
+/// Size of every directory directly under `path`. This is the "which folder is
+/// eating the disk" question on a full server, so `du -x` stays on the current
+/// filesystem: other mounts under this path report as nearly empty on purpose,
+/// because their bytes are not on the disk being investigated.
+#[tauri::command]
+pub async fn sftp_du(
+    app: AppHandle,
+    pool: State<'_, SshPool>,
+    host_id: i64,
+    path: String,
+) -> Result<Vec<DuEntry>, String> {
+    let spec = crate::build_spec(&app, host_id)?;
+    let h = pooled(&pool, host_id, spec).await?;
+    // -k rather than -B1 so busybox hosts work too; xargs -0 keeps names with
+    // spaces intact; permission errors are dropped, not fatal
+    let cmd = format!(
+        "cd {} && timeout 240 find . -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null | xargs -0 du -xsk -- 2>/dev/null",
+        shq(&path)
+    );
+    let out = crate::ssh::run_command_for(&h, &cmd, std::time::Duration::from_secs(250))
+        .await
+        .ok_or("the host did not answer in time — the tree may be very large")?;
+    let mut rows: Vec<DuEntry> = out
+        .lines()
+        .filter_map(|l| {
+            let (kb, name) = l.split_once('\t')?;
+            let name = name.strip_prefix("./").unwrap_or(name);
+            if name.is_empty() || name == "." {
+                return None;
+            }
+            Some(DuEntry { name: name.to_string(), bytes: kb.trim().parse::<u64>().ok()? * 1024 })
+        })
+        .collect();
+    rows.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    Ok(rows)
+}
+
 /* ---------- search (server-side `find`) ---------- */
 
 #[derive(Serialize)]

@@ -178,6 +178,19 @@ dialog as the backup export.
 
 ## Gotchas learned the hard way
 
+- **`h.username` is null for identity-auth hosts.** Anything that calls
+  `.toLowerCase()` on it directly throws, and because the sidebar filter did,
+  ONE such host anywhere made typing in the filter render an empty tree. Always
+  go through `hostUser(h)` and guard `h.hostname || ""`. The filter now shows the
+  hostname in the row's meta column whenever the query matched the hostname, so
+  "which server is this IP" is answered in place.
+- **Directory sizes** (`sftp_du`, the Sizes button) use `du -xsk` via
+  `find -print0 | xargs -0` so names with spaces and hidden dirs survive, `-k`
+  so busybox works, and `-x` deliberately: on a full disk you want what is on
+  THIS filesystem, so other mounts under the path read as near-empty. It runs
+  through `run_command_for` with a 250 s cap — the 30 s default would cut a big
+  tree short and misreport it as small.
+
 - **A modal MUST take focus, or the thing that opened it keeps it.** `choose()`
   moved no focus and bound no keys, so after clicking a tab's close button that
   button stayed focused: pressing Enter re-fired it and opened a SECOND dialog on

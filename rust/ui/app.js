@@ -261,8 +261,11 @@ function renderTree() {
   const filter = $("#filter").value.trim().toLowerCase();
   const tree = $("#tree");
   tree.innerHTML = "";
+  // Identity-auth hosts have no username of their own, so h.username is null
+  // and .toLowerCase() threw — one such host anywhere broke filtering entirely.
+  const hostMatch = h => (h.hostname || "").toLowerCase().includes(filter);
   const match = h => !filter || h.label.toLowerCase().includes(filter) ||
-    h.hostname.toLowerCase().includes(filter) || h.username.toLowerCase().includes(filter);
+    hostMatch(h) || hostUser(h).toLowerCase().includes(filter);
 
   const hostRow = (h, depth) => {
     const shownUser = hostUser(h);
@@ -271,7 +274,7 @@ function renderTree() {
     he.style.paddingLeft = (22 + depth * 14) + "px";
     he.title = `${shownUser}@${h.hostname}:${h.port}`;
     he.innerHTML = `<span class="hicon">●</span><span class="hlabel">${esc(h.label)}</span>` +
-      `<span class="hmeta">${esc(shownUser)}</span>` +
+      `<span class="hmeta">${esc(filter && hostMatch(h) ? h.hostname : shownUser)}</span>` +
       `<button class="edit-btn" title="Edit">✎</button>`;
     he.onclick = e => {
       if (e.target.classList.contains("edit-btn")) { openHostModal(h); return; }
@@ -1891,6 +1894,7 @@ function buildPane(paneEl, i) {
       <button class="chmod">chmod</button>
       <button class="del">Delete</button>
       <button class="dl">Download</button>
+      <button class="du" title="Measure every folder here (du) and sort by size — for finding what fills a disk">Sizes</button>
     </div>
     <div class="fp-list"><div class="fp-empty">Select a host to browse.</div></div>`;
 
@@ -1914,6 +1918,7 @@ function buildPane(paneEl, i) {
       const r = await invoke("sftp_list", { hostId: P.hostId, path: path ?? P.path });
       P.path = r.path;
       P.entries = r.entries;
+      P.sizeMax = 0;
       P.selIdx = new Set();
       P.anchor = null;
       pathInput.value = r.path;
@@ -1930,7 +1935,7 @@ function buildPane(paneEl, i) {
     const rows = P.entries.map((e, idx) => `
       <tr class="fp-row ${e.is_dir ? "dir" : ""}" draggable="true" data-i="${idx}">
         <td class="fname"><span class="ficon">${e.is_dir ? "📁" : "📄"}</span>${esc(e.name)}</td>
-        <td class="fsize">${e.is_dir ? "" : fmtBytes(e.size)}</td>
+        <td class="fsize">${P.sizeMax ? `<i class="szbar" style="width:${Math.round(e.size / P.sizeMax * 100)}%"></i>` : ""}<span>${e.is_dir && !e.measured ? "" : fmtBytes(e.size)}</span></td>
         <td class="fperm">${e.perm}</td>
         <td class="fdate">${fmtDate(e.mtime)}</td>
       </tr>`).join("");
@@ -2081,6 +2086,29 @@ function buildPane(paneEl, i) {
       await invoke("sftp_download", { hostId: P.hostId, remotePath: joinPath(P.path, e.name), localPath: dest, hostLabel: host.label, ...fastOpts() })
         .catch(e2 => { logUi("ui", e2); alert(e2); });
     }
+  };
+  paneEl.querySelector(".du").onclick = async () => {
+    if (!P.hostId) return;
+    const btn = paneEl.querySelector(".du");
+    btn.disabled = true;
+    btn.textContent = "measuring…";
+    try {
+      const rows = await invoke("sftp_du", { hostId: P.hostId, path: P.path });
+      const bytes = new Map(rows.map(r => [r.name, r.bytes]));
+      for (const e of P.entries) {
+        if (e.is_dir && bytes.has(e.name)) { e.size = bytes.get(e.name); e.measured = true; }
+      }
+      // biggest first, folders and files together — that is the question being asked
+      P.entries.sort((a, b) => (b.size || 0) - (a.size || 0));
+      P.sizeMax = Math.max(1, ...P.entries.map(e => e.size || 0));
+      P.selIdx = new Set();
+      P.anchor = null;
+      renderList();
+      const total = P.entries.reduce((n, e) => n + (e.size || 0), 0);
+      paneEl.querySelector(".findnote").textContent = `${fmtBytes(total)} in ${P.path} (this filesystem only)`;
+    } catch (e) { logUi("ui", e); alert(e); }
+    btn.disabled = false;
+    btn.textContent = "Sizes";
   };
   paneEl.querySelector(".mkdir").onclick = async () => {
     if (!P.hostId) return;

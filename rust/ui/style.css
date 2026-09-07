@@ -340,3 +340,8 @@ input[type="password"]::-ms-clear { display: none; width: 0; height: 0; }
   align-items: center; justify-content: center; z-index: 90; animation: fadeIn .14s ease; }
 .confirm-box { width: 400px; }
 .confirm-msg { line-height: 1.6; color: var(--fg); }
+
+/* directory sizes: a proportional bar behind the number, biggest = full width */
+.fp-table td.fsize { position: relative; }
+.fp-table td.fsize > span { position: relative; }
+.szbar { position: absolute; left: 0; top: 22%; height: 56%; background: var(--accent); opacity: .16; border-radius: 2px; }

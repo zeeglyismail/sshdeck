@@ -301,10 +301,20 @@ pub fn spawn_session(app: AppHandle, sessions: &SshSessions, id: u32, spec: Conn
 const CMD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub(crate) async fn run_command(handle: &Handle<Client>, cmd: &str) -> Option<String> {
+    run_command_for(handle, cmd, CMD_TIMEOUT).await
+}
+
+/// Same, with a caller-chosen limit — `du` over a big tree legitimately takes
+/// minutes, which the 30 s default would cut short and misreport.
+pub(crate) async fn run_command_for(
+    handle: &Handle<Client>,
+    cmd: &str,
+    limit: std::time::Duration,
+) -> Option<String> {
     // Without this an upload that has sent every byte can sit at "running"
     // forever: the bytes are gone, and the `stat` that confirms the size never
     // comes back. A timeout turns that into a resumable error instead.
-    tokio::time::timeout(CMD_TIMEOUT, async {
+    tokio::time::timeout(limit, async {
         let mut channel = handle.channel_open_session().await.ok()?;
         channel.exec(true, cmd).await.ok()?;
         let mut out = Vec::new();
