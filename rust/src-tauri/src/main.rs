@@ -6,7 +6,6 @@ mod crypto;
 mod db;
 mod export;
 mod fast;
-mod selftest;
 mod log;
 mod portability;
 mod sftp;
@@ -429,7 +428,6 @@ async fn app_version() -> String {
 }
 
 fn main() {
-    if std::env::args().any(|a| a == "--selftest-fast") { selftest::run(); return; }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Ptys::default())
